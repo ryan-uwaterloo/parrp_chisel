@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package sifive.blocks.inclusivecache
+package paarp_chisel.blocks.inclusivecache
 
 import chisel3._
 import chisel3.util._
@@ -112,7 +112,6 @@ class Directory(params: InclusiveCacheParameters) extends Module
   val set = params.dirReg(RegEnable(io.read.bits.set, ren), ren1)
 
   // Compute the victim way in case of an evicition
-  //this part will need editing for ParRP
   val victimLFSR = random.LFSR(width = 16, params.dirReg(ren))(InclusiveCacheParameters.lfsrBits-1, 0)
   val victimSums = Seq.tabulate(params.cache.ways) { i => ((1 << InclusiveCacheParameters.lfsrBits)*i / params.cache.ways).U }
   val victimLTE  = Cat(victimSums.map { _ <= victimLFSR }.reverse)
@@ -142,4 +141,11 @@ class Directory(params: InclusiveCacheParameters) extends Module
   params.ccover(ren2 && setQuash && !tagMatch && wayMatch, "DIRECTORY_EVICT_BYPASS", "Bypassing a write to a directory eviction")
 
   def json: String = s"""{"clients":${params.clientBits},"mem":"${cc_dir.pathName}","clean":"${wipeDone.pathName}"}"""
+
+  // clock cycle counter
+    val clk_cycle = RegInit(0.U(32.W))
+    clk_cycle := clk_cycle + 1.U
+  when (ren || wen) {
+    printf(cf"@ clk_cycle ${clk_cycle}: Directory read: ${ren} set: 0x${io.read.bits.set}%x tag: 0x${io.read.bits.tag}%x /write: ${wen} set: 0x${io.write.bits.set}%x tag: 0x${io.write.bits.data.tag}%x\n")
+  }
 }

@@ -293,7 +293,9 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
         printf(cf"@ clk_cycle ${clk_cycle}: Req from X passed to MSHR ${mshr_select} due to hit on set ${request.bits.set}\n")
     }
   }.elsewhen (alloc & request.valid) {
-      printf(cf"@ clk_cycle ${clk_cycle}: Allocating MSHR For Request!\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: Allocating MSHR ${mshr_select} For Request!\n")
+  }.elsewhen (queue & request.valid) {
+      printf(cf"@ clk_cycle ${clk_cycle}: Queuing to MSHR ${mshr_select} For Request!\n")
   }
 
   val mshr_insertOH = ~(leftOR(~mshr_validOH) << 1) & ~mshr_validOH & prioFilter

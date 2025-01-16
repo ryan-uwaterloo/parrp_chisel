@@ -146,6 +146,9 @@ class Directory(params: InclusiveCacheParameters) extends Module
     val clk_cycle = RegInit(0.U(32.W))
     clk_cycle := clk_cycle + 1.U
   when (ren || wen) {
-    printf(cf"@ clk_cycle ${clk_cycle}: Directory read: ${ren} set: 0x${io.read.bits.set}%x tag: 0x${io.read.bits.tag}%x /write: ${wen} set: 0x${io.write.bits.set}%x tag: 0x${io.write.bits.data.tag}%x\n")
+    printf(cf"@ clk_cycle ${clk_cycle}: Directory read: ${ren} set: 0x${io.read.bits.set}%x tag: 0x${io.read.bits.tag}%x /write: ${wen} set: 0x${write.bits.set}%x tag: 0x${write.bits.data.tag}%x state: 0x${write.bits.data.state}%x\n")
+  }
+  when (io.write.valid) {
+    printf(cf"@ clk_cycle ${clk_cycle}: Queueing write! set: 0x${io.write.bits.set}%x tag: 0x${io.write.bits.data.tag}%x state: 0x${io.write.bits.data.state}%x\n")
   }
 }

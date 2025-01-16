@@ -160,6 +160,10 @@ class BankedStore(params: InclusiveCacheParameters) extends Module
     req.bankSum := sum
     req.bankSel | sum
   }
+     // clock cycle counter for printfs
+    val clk_cycle = RegInit(0.U(32.W))
+    clk_cycle := clk_cycle + 1.U
+ 
   // Access the banks
   val regout = VecInit(cc_banks.zipWithIndex.map { case (b, i) =>
     val en  = reqs.map(_.bankEn(i)).reduce(_||_)
@@ -171,6 +175,38 @@ class BankedStore(params: InclusiveCacheParameters) extends Module
     when (wen && en) { b.write(idx, data) }
     RegEnable(b.read(idx, !wen && en), RegNext(!wen && en))
   })
+//* doesn't work!
+  val regWen = VecInit(reqs.map(_.wen))
+  val regEn0  = reqs.map(_.bankEn(0)).reduce(_||_)
+  val regEn1  = reqs.map(_.bankEn(1)).reduce(_||_)
+  val regEn2  = reqs.map(_.bankEn(2)).reduce(_||_)
+  val regEn3  = reqs.map(_.bankEn(3)).reduce(_||_)
+
+  when (regWen(0) && regEn0) {
+    printf(cf"@ clk_cycle ${clk_cycle}: BS write to bank 0, data = 0x${Cat(reqs.map(_.data(0)))}%x.\n")
+  }
+  when (regWen(1) && regEn1) {
+    printf(cf"@ clk_cycle ${clk_cycle}: BS write to bank 1, data = 0x${Cat(reqs.map(_.data(1)))}%x.\n")
+  }
+  when (regWen(2) && regEn2) {
+    printf(cf"@ clk_cycle ${clk_cycle}: BS write to bank 2, data = 0x${Cat(reqs.map(_.data(2)))}%x.\n")
+  }
+  when (regWen(3) && regEn3) {
+    printf(cf"@ clk_cycle ${clk_cycle}: BS write to bank 3, data = 0x${Cat(reqs.map(_.data(3)))}%x.\n")
+  }
+
+  when (!regWen(0) && regEn0) {
+    printf(cf"@ clk_cycle ${clk_cycle}: BS read to bank 0, data = 0x${regout(0)}%x.\n")
+  }
+  when (!regWen(1) && regEn1) {
+    printf(cf"@ clk_cycle ${clk_cycle}: BS read to bank 1, data = 0x${regout(1)}%x.\n")
+  }
+  when (!regWen(2) && regEn2) {
+    printf(cf"@ clk_cycle ${clk_cycle}: BS read to bank 2, data = 0x${regout(2)}%x.\n")
+  }
+  when (!regWen(3) && regEn3) {
+    printf(cf"@ clk_cycle ${clk_cycle}: BS read to bank 3, data = 0x${regout(3)}%x.\n")
+  }//*/
 
   val regsel_sourceC = RegNext(RegNext(sourceC_req.bankEn))
   val regsel_sourceD = RegNext(RegNext(sourceD_rreq.bankEn))

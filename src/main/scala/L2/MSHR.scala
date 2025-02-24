@@ -187,7 +187,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   io.schedule.bits.d.valid := !s_execute && w_pprobeack && w_grant
   io.schedule.bits.e.valid := !s_grantack && w_grantfirst
   io.schedule.bits.x.valid := !s_flush && w_releaseack
-  io.schedule.bits.dir.valid := (!s_release && w_rprobeackfirst) || (!s_writeback && no_wait)
+  io.schedule.bits.dir.valid := (!s_release && w_rprobeackfirst) || (!s_writeback && no_wait) // we must complete lru modifications before these conditions are met...
   io.schedule.bits.reload := no_wait
   io.schedule.valid := io.schedule.bits.a.valid || io.schedule.bits.b.valid || io.schedule.bits.c.valid ||
                        io.schedule.bits.d.valid || io.schedule.bits.e.valid || io.schedule.bits.x.valid ||
@@ -265,11 +265,55 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     }
   }
 
+
+   //=============== PARRP DATA LRU CALCULATION ====================//
+  //notes:
+    // how do we pipeline this, where is the critical path?
+    // isolate lru state of hit way in clk1 
+    // update lrus in clk2?
+  //cases and stuff:
+    // if we demote something due to an explicit release -> change state to not in core, leave LRU info unchanged.
+  val new_parrp_data = Reg(Vec(params.partitionSize, new ParrpEntry(params)))
+  new_parrp_data := meta.parrp_data_vec
+  when(meta_valid && request.prio(2) && (request.opcode === 6.U || request.opcode === 7.U)) {// release
+    val new_parrp_data = meta.parrp_data_vec
+    new_parrp_data(meta.way).state := ParrpStates.deallocated //deallocate state, leave the rest of the vec alone!
+    final_meta_writeback.in_core := meta.in_core & ~UIntToOH(meta.core) //remove core from phy owners vec
+  }.elsewhen(meta_valid){ //for all other valid reqs
+    // if we hit something in not in core section of partition -> set state to in core, update LRU for all ways.
+    meta.parrp_data_vec.zipWithIndex.map { case(d, i) => //collapse lru update map function to save hw later...
+      new_parrp_data(i).lru := Mux(d.lru < meta.parrp_data_vec(meta.parrp_way).lru, d.lru + 1.U, d.lru) //parrp way contains either hit or evicted, depending on miss status - but what we do doesn't change!
+    }
+      // if we evict something from vec to take in a new value -> set state to in core, update LRU for all ways, update phy way index for replaced.
+    // val new_parrp_data_vec_replace = meta.parrp_data_vec.map { _ => //replace subcase
+    //   val new_parrp_entry = Wire(new ParrpEntry(params)) //blank new vec
+    //   parrp_entry := _ //some of this should get overwritten and be inferred, right?
+    //   parrp_entry.lru := Mux(_.lru < meta.parrp_data_vec(meta.way).lru, _.lru + 1.U, _.lru) // increment LRU by 1 iff it is lower in LRU order than replaced way
+    //   parrp_entry //return updated parrp entry
+    // }
+    new_parrp_data(meta.parrp_way).lru := 0.U //set updated way lru to 0 as it is MRU
+    //replace updated way with new data beyond lru if a miss
+    when(!meta.parrp_hit){ //when we miss in partition, update partition. Don't care about phy eviction/hit status.
+      new_parrp_data(meta.parrp_way).state := ParrpStates.allocated //set to allocated state in partition
+      new_parrp_data(meta.parrp_way).way_index := meta.way //set index to the phy way we are using (when replaced and not invalid, this way is released from L2 first, but no wb)
+    }
+    final_meta_writeback.in_core := meta.in_core | UIntToOH(meta.core) //add core to phy owners vec
+    printf(cf"are you crazy? fmw_in_core: ${final_meta_writeback.in_core} meta_core: ${meta.core} \n")
+  }
+  //=============== END PARRP DATA LRU CALCULATION ================//
+
+  //=============== PARRP DATA ASSIGNMMENT ========================//
+  io.schedule.bits.dir.bits.parrp_data_vec := new_parrp_data //this will change on an aborted transition due to reasons xyz, or nested requests
+  io.schedule.bits.dir.bits.core := meta.core //this might change but I don't think it does
+  //=============== END PARRP DATA ASSIGNMMENT ====================//
+
+
   val invalid = Wire(new DirectoryEntry(params))
   invalid.dirty   := false.B
   invalid.state   := INVALID
   invalid.clients := 0.U
   invalid.tag     := 0.U
+  invalid.in_core := 0.U
 
   // Just because a client says BtoT, by the time we process the request he may be N.
   // Therefore, we must consult our own meta-data state to confirm he owns the line still.
@@ -536,7 +580,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   }
 
   // Create execution plan
-  when (io.directory.valid || (io.allocate.valid && io.allocate.bits.repeat)) {
+  when (io.directory.valid || (io.allocate.valid && io.allocate.bits.repeat)) { //investigate this io.allocate thingy
     meta_valid := true.B
     meta := new_meta
     probes_done := 0.U

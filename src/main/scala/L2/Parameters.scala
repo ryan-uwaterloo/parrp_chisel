@@ -186,6 +186,8 @@ case class InclusiveCacheParameters(
   val tagBits    = addressBits - setBits - offsetBits
   val putBits    = log2Ceil(max(putLists, relLists))
 
+  println(s"waybits: $wayBits, setbits: $setBits, offsetbits: $offsetBits, tagbits: $tagBits, addressbits: $addressBits \n")
+
   require (tagBits > 0)
   require (offsetBits > 0)
 
@@ -193,6 +195,32 @@ case class InclusiveCacheParameters(
   val outerBeatBits = (offsetBits - log2Ceil(outer.manager.beatBytes)) max 1
   val innerMaskBits = inner.manager.beatBytes / micro.writeBytes
   val outerMaskBits = outer.manager.beatBytes / micro.writeBytes
+
+  //=================== ParRP PARAMS=================//
+  //val groupedByCore = inner.client.clients.filter(_.supports.probe).groupBy { client => //group clients that can probe by core (and everything else, 
+  val groupedByCore = inner.client.clients.groupBy { client => //ICache isn't flagged as supporting probe (I'm DEAD)
+    client.name.split(" ").take(2).mkString(" ") //group by first 2 words of the name (if they can probe) LOL)
+  }.filter(_._1.split(" ").take(1).mkString("") == "Core") //unfortunately we must include the monitors as they mess with the cache too...
+
+  val coreIndexMap: Map[String, Int] = groupedByCore.keys.zipWithIndex.toMap //package with indicies
+
+  val coreBits = log2Ceil(coreIndexMap.size)
+
+  val sourceIdRanges: Seq[(IdRange, UInt)] = groupedByCore.flatMap { case (core, ranges) =>
+    ranges.map(_.sourceId).map(range => (range, coreIndexMap(core).U(coreBits.W)))//I sure HOPE this translation works LOL
+  }.toSeq
+
+  println(s"coreIndexMap: $coreIndexMap\n")
+  println(s"GroupedByCore: $groupedByCore\n")
+  println(s"SourceIdRanges: $sourceIdRanges \n")
+
+  groupedByCore.foreach { case (core, ranges) =>
+    val rangesList = ranges.map(_.sourceId)//make a list of the ranges per group
+    println(s"$core -> ${rangesList.mkString(", ")}") //yes this works!
+  } //no longer need this, I think, as it's all compile time
+
+  val partitionSize = cache.ways/(coreIndexMap.size)//should be num cores
+  //==================== END ParRP PARAMS =============================//
 
   def clientBit(source: UInt): UInt = {
     if (clientBitsRaw == 0) {

@@ -15,17 +15,17 @@
  * limitations under the License.
  */
 
-package paarp_chisel.subsystem
+package parrp_chisel.subsystem
 
 import org.chipsalliance.cde.config._
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.tile._
 import freechips.rocketchip.rocket._
 import freechips.rocketchip.tilelink._
-import paarp_chisel.blocks.inclusivecache._
+import parrp_chisel.blocks.inclusivecache._
 import freechips.rocketchip.devices.tilelink._
 import freechips.rocketchip.util._
-import paarp_chisel.blocks.inclusivecache.InclusiveCacheParameters
+import parrp_chisel.blocks.inclusivecache.InclusiveCacheParameters
 import freechips.rocketchip.subsystem._
 
 import java.nio.file.{Paths, Files}
@@ -110,9 +110,9 @@ class WithInclusiveCache(
       l2Ctrl))
 
       //Files.write( Paths.get( "./dbg/pain.txt" ), (bufInnerInterior.toString + bufOuterInterior.toString).getBytes( StandardCharsets.UTF_8 ) )
-       println("MagicHash42069")
-       println(bufInnerInterior)
-       println(bufOuterInterior)
+       //println("MagicHash42069")
+       //println(bufInnerInterior)
+       //println(bufOuterInterior)
 
     def skipMMIO(x: TLClientParameters) = {
       val dcacheMMIO =

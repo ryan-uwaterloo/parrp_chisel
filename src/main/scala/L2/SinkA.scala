@@ -19,7 +19,7 @@
 This module is from cores to L2, and is a channel that receives requests from the cores
  */
 
-package paarp_chisel.blocks.inclusivecache
+package parrp_chisel.blocks.inclusivecache
 
 import chisel3._
 import chisel3.util._

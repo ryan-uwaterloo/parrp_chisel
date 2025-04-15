@@ -1,4 +1,4 @@
-package paarp_chisel.util.printf_helper
+package parrp_chisel.util.printf_helper
 
 import chisel3._
 import chisel3.util._

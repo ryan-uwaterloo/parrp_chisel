@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package paarp_chisel.blocks.inclusivecache
+package parrp_chisel.blocks.inclusivecache
 
 import chisel3._
 

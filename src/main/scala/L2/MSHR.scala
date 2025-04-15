@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package paarp_chisel.blocks.inclusivecache
+package parrp_chisel.blocks.inclusivecache
 
 import chisel3._
 import chisel3.util._
@@ -225,6 +225,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     final_meta_writeback.state   := Mux(request.param =/= TtoT && meta.state === TRUNK, TIP, meta.state)
     final_meta_writeback.clients := meta.clients & ~Mux(isToN(request.param), req_clientBit, 0.U)
     final_meta_writeback.hit     := true.B // chained requests are hits
+    // printf(cf"using prio2 client update! fmw.clients = ${final_meta_writeback.clients}, meta.clients = ${meta.clients}, isToN = ${isToN(request.param)}, param = ${request.param}, req_clientBit = ${req_clientBit}\n")
   } .elsewhen (request.control && params.control.B) { // request.prio(0)
     when (meta.hit) {
       final_meta_writeback.dirty   := false.B
@@ -232,6 +233,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
       final_meta_writeback.clients := meta.clients & ~probes_toN
     }
     final_meta_writeback.hit := false.B
+    // printf("using prio0 client update! \n")
   } .otherwise {
     final_meta_writeback.dirty := (meta.hit && meta.dirty) || !request.opcode(2)
     final_meta_writeback.state := Mux(req_needT,
@@ -273,12 +275,19 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     // update lrus in clk2?
   //cases and stuff:
     // if we demote something due to an explicit release -> change state to not in core, leave LRU info unchanged.
-  val new_parrp_data = Reg(Vec(params.partitionSize, new ParrpEntry(params)))
+  val new_parrp_data = Wire(Vec(params.partitionSize, new ParrpEntry(params)))
+  val we_released_something = Reg(Bool()) //surely a flag is disgusting enough to work LOL
+  val noncoherent_request = request.prio(0) && (request.opcode === 0.U || request.opcode === 1.U || request.opcode === 4.U || request.opcode === 5.U)//a put or a get (or an intent) on A channel are non-coherent requests
+  we_released_something := false.B
   new_parrp_data := meta.parrp_data_vec
   when(meta_valid && request.prio(2) && (request.opcode === 6.U || request.opcode === 7.U)) {// release
-    val new_parrp_data = meta.parrp_data_vec
-    new_parrp_data(meta.way).state := ParrpStates.deallocated //deallocate state, leave the rest of the vec alone!
+    //val new_parrp_data = meta.parrp_data_vec
+    new_parrp_data(meta.parrp_way).state := ParrpStates.deallocated //deallocate state, leave the rest of the vec alone!
     final_meta_writeback.in_core := meta.in_core & ~UIntToOH(meta.core) //remove core from phy owners vec
+    printf(cf"Releasing! in_core = ${final_meta_writeback.in_core}, updated_entry = ${new_parrp_data(meta.parrp_way)}\n")
+  }.elsewhen(meta_valid && !s_release){ //if our request prompts a cache release, we must mark parrp_entry as invalid so it is properly populated with state info.
+    new_parrp_data(meta.parrp_way).state := ParrpStates.invalid //set state invalid (may be unneeded idk, depends what else is going on)
+    we_released_something := true.B   
   }.elsewhen(meta_valid){ //for all other valid reqs
     // if we hit something in not in core section of partition -> set state to in core, update LRU for all ways.
     meta.parrp_data_vec.zipWithIndex.map { case(d, i) => //collapse lru update map function to save hw later...
@@ -292,14 +301,18 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     //   parrp_entry //return updated parrp entry
     // }
     new_parrp_data(meta.parrp_way).lru := 0.U //set updated way lru to 0 as it is MRU
-    //replace updated way with new data beyond lru if a miss
-    when(!meta.parrp_hit){ //when we miss in partition, update partition. Don't care about phy eviction/hit status.
-      new_parrp_data(meta.parrp_way).state := ParrpStates.allocated //set to allocated state in partition
+    //replace updated way with new data beyond lru if a miss or overwriting a replaced way
+    when(!meta.parrp_hit || we_released_something){ //when we miss in partition, update partition. Don't care about phy eviction/hit status.
+      we_released_something := we_released_something //latch until meta is no longer valid
+      new_parrp_data(meta.parrp_way).state := Mux(noncoherent_request, ParrpStates.deallocated, ParrpStates.allocated) //set to deallocated for noncoherent, allocated state for coherent in partition
       new_parrp_data(meta.parrp_way).way_index := meta.way //set index to the phy way we are using (when replaced and not invalid, this way is released from L2 first, but no wb)
     }
-    final_meta_writeback.in_core := meta.in_core | UIntToOH(meta.core) //add core to phy owners vec
-    printf(cf"are you crazy? fmw_in_core: ${final_meta_writeback.in_core} meta_core: ${meta.core} \n")
+    final_meta_writeback.in_core := Mux(noncoherent_request, meta.in_core, meta.in_core | UIntToOH(meta.core)) //add core to phy owners vec if coherent request
+  
   }
+  final_meta_writeback.parrp_data_vec := new_parrp_data //so this will properly replay in mshr
+  //printf(cf"are you crazy? fmw_in_core: ${final_meta_writeback.in_core} meta_core: ${meta.core} \n")
+
   //=============== END PARRP DATA LRU CALCULATION ================//
 
   //=============== PARRP DATA ASSIGNMMENT ========================//
@@ -547,6 +560,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   // Bootstrap new requests
   val allocate_as_full = WireInit(new FullRequest(params), init = io.allocate.bits)
   val new_meta = Mux(io.allocate.valid && io.allocate.bits.repeat, final_meta_writeback, io.directory.bits)
+  // new_meta.parrp_data_vec := Mux(io.allocate.valid && io.allocate.bits.set)
   val new_request = Mux(io.allocate.valid, allocate_as_full, request)
   val new_needT = needT(new_request.opcode, new_request.param)
   val new_clientBit = params.clientBit(new_request.source)
@@ -580,7 +594,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   }
 
   // Create execution plan
-  when (io.directory.valid || (io.allocate.valid && io.allocate.bits.repeat)) { //investigate this io.allocate thingy
+  when (io.directory.valid || (io.allocate.valid && io.allocate.bits.repeat)) { //io.allocate is dequeuing from req queue
     meta_valid := true.B
     meta := new_meta
     probes_done := 0.U
@@ -685,6 +699,8 @@ class MSHR(params: InclusiveCacheParameters) extends Module
       when (!new_request.opcode(2) && new_meta.hit && !new_meta.dirty) {
         s_writeback := false.B
       }
+      // perhaps every request should writeback to directory for parrp purposes... right?
+      s_writeback := false.B //schedule a writeback for any access, regardless of physical directory changing or not.
     }
   }
 }

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package paarp_chisel.blocks.inclusivecache
+package parrp_chisel.blocks.inclusivecache
 
 import chisel3._
 import chisel3.util._
@@ -212,7 +212,7 @@ case class InclusiveCacheParameters(
 
   println(s"coreIndexMap: $coreIndexMap\n")
   println(s"GroupedByCore: $groupedByCore\n")
-  println(s"SourceIdRanges: $sourceIdRanges \n")
+  println(s"SourceIdRanges: $sourceIdRanges\n")
 
   groupedByCore.foreach { case (core, ranges) =>
     val rangesList = ranges.map(_.sourceId)//make a list of the ranges per group
@@ -220,6 +220,8 @@ case class InclusiveCacheParameters(
   } //no longer need this, I think, as it's all compile time
 
   val partitionSize = cache.ways/(coreIndexMap.size)//should be num cores
+
+  println(s"partitionSize: $partitionSize\n")
   //==================== END ParRP PARAMS =============================//
 
   def clientBit(source: UInt): UInt = {

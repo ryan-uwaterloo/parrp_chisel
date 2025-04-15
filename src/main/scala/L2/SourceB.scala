@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package paarp_chisel.blocks.inclusivecache
+package parrp_chisel.blocks.inclusivecache
 
 import chisel3._
 import chisel3.util._
@@ -88,21 +88,21 @@ class SourceB(params: InclusiveCacheParameters) extends Module
 
     when (b.valid && b.ready){
       when (b.bits.opcode === 0.U){
-      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: PutFullData, addr: 0x${b.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: PutFullData, param: ${b.bits.param}, addr: 0x${b.bits.address}%x\n")
     } .elsewhen (b.bits.opcode === 1.U){
-      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: PutPartialData, addr: 0x${b.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: PutPartialData, param: ${b.bits.param}, addr: 0x${b.bits.address}%x\n")
     } .elsewhen (b.bits.opcode === 2.U){
-      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: ArithmeticData, addr: 0x${b.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: ArithmeticData, param: ${b.bits.param}, addr: 0x${b.bits.address}%x\n")
     } .elsewhen (b.bits.opcode === 3.U) {
-      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: LogicalData, addr: 0x${b.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: LogicalData, param: ${b.bits.param}, addr: 0x${b.bits.address}%x\n")
     } .elsewhen (b.bits.opcode === 4.U) {
-      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: Get, addr: 0x${b.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: Get, param: ${b.bits.param}, addr: 0x${b.bits.address}%x\n")
     } .elsewhen (b.bits.opcode === 5.U) {
-      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: Hint, addr: 0x${b.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: Hint, param: ${b.bits.param}, addr: 0x${b.bits.address}%x\n")
     } .elsewhen (b.bits.opcode === 6.U) {
-      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: ProbeBlock, addr: 0x${b.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: ProbeBlock, param: ${b.bits.param}, addr: 0x${b.bits.address}%x\n")
     } .elsewhen(b.bits.opcode === 7.U) {
-      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: ProbePerm, addr: 0x${b.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Source B Request! opcode: ProbePerm, param: ${b.bits.param}, addr: 0x${b.bits.address}%x\n")
     }}
   }
 }

@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package paarp_chisel.blocks.inclusivecache
+package parrp_chisel.blocks.inclusivecache
 
 import chisel3._
 import chisel3.util._
 import freechips.rocketchip.tilelink._
-import paarp_chisel.util._
+import parrp_chisel.util._
 
 class SourceARequest(params: InclusiveCacheParameters) extends InclusiveCacheBundle(params)
 {

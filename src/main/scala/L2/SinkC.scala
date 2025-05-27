@@ -77,6 +77,10 @@ class SinkC(params: InclusiveCacheParameters) extends Module
     val hasData = params.inner.hasData(c.bits)
     val raw_resp = c.bits.opcode === TLMessages.ProbeAck || c.bits.opcode === TLMessages.ProbeAckData
     val resp = Mux(c.valid, raw_resp, RegEnable(raw_resp, c.valid))
+    dontTouch(first)
+    dontTouch(last)
+    dontTouch(hasData)
+    //I hate chisel.
 
     // Handling of C is broken into two cases:
     //   ProbeAck

@@ -135,7 +135,7 @@ class Directory(params: InclusiveCacheParameters) extends Module
   val set = params.dirReg(RegEnable(io.read.bits.set, ren), ren1)
 
   // Compute the victim way in case of an evicition
-  val victimLFSR = random.LFSR(width = 16, params.dirReg(ren))(InclusiveCacheParameters.lfsrBits-1, 0)
+  val victimLFSR = random.LFSR(width = params.cache.ways, params.dirReg(ren))(log2Ceil(params.cache.ways) - 1, 0)//this will give us an lsfr value that will shift no more than the amount of ways we have
   val victimSums = Seq.tabulate(params.cache.ways) { i => ((1 << InclusiveCacheParameters.lfsrBits)*i / params.cache.ways).U }
   val victimLTE  = Cat(victimSums.map { _ <= victimLFSR }.reverse)
   val victimSimp = Cat(0.U(1.W), victimLTE(params.cache.ways-1, 1), 1.U(1.W))
@@ -173,17 +173,19 @@ class Directory(params: InclusiveCacheParameters) extends Module
     name = "cc_parrp",
     desc = "ParRP RAM",
     size = params.cache.sets,//per set
-    data = Vec(params.sourceIdRanges.size, Vec(params.partitionSize, new ParrpEntry(params)))//per core, per way in partition, store a ParrpEntry which contains way, state, and LRU data
+    data = Vec(params.coreIndexMap.size, Vec(params.partitionSize, new ParrpEntry(params)))//per core, per way in partition, store a ParrpEntry which contains way, state, and LRU data
   )
 
   //we SHOULD be able to piggyback off of the existing wiping logic because it's per set as well.
   val wipeVec = VecInit((0 until params.partitionSize).map {  i => //the is the internal vec of the parrp state 
     var way = Wire(new ParrpEntry(params))//blank bundle
-    way.way_index := i.U 
+    way.way_index := 0.U 
     way.state := ParrpStates.invalid
     way.lru := i.U
     way //this should init our wipevector to produce a valid LRU state
   })
+
+  dontTouch(wipeVec)
 
   // read register
   val parrp_table_reg_vec = params.dirReg(cc_parrp.read(io.read.bits.set, ren), ren1) //need reg to store read vals, this should still infer right, it's how the directory does it.
@@ -230,70 +232,46 @@ class Directory(params: InclusiveCacheParameters) extends Module
     MuxT(a._1.lru > b._1.lru, a, b) //collapse vector down to way index of maximum adjusted lru value.  
   }._2
 
-  //val parrp_speculated_victim_index = updated_lru_vec.indexWhere(_.way_index === parrp_speculated_victim_way)
+  // val phy_vacant_way = MuxCase(params.cache.ways.U,
+  //   regout.zipWithIndex.map { case (way, idx) => //use regout to get right width, idk if we actually need it but ~optimization~ fixes it lol
+  //     (parrp_table_reg_vec.zipWithIndex.map { case (core_table, core_idx) => //per core
+  //         Mux((core_idx.U === bypass.core && bypass_valid && bypass.set === set), bypass.parrp_data_vec, //bypass write_core if same set
+  //         core_table).map{ case (entry) => //per entry in core
+  //         entry.way_index === idx.U && entry.state =/= ParrpStates.invalid //if the way is in the state table and it's not invalid
+  //       }.reduce(_ || _) //if any match in this core
+  //     }.reduce(_ || _) === 0.U, idx.U) //if no match for this way, it is free.
+  //   } // this is such a nasty mux lmfao
+  // )
 
-  
+  // val true_victim = Mux(phy_vacant_way =/= params.cache.ways.U, phy_vacant_way, parrp_table_core_vec(parrp_speculated_victim_index).way_index)// get lowest index unowned way (cheapest), could consider random too.
 
-  // val phy_victim = regout.zipWithIndex.map{ case ()
-    
-  // }
-  //val ways = regout.map(d => d.asTypeOf(new DirectoryEntry(params)))
-  // val phy_vacant_way = Cat(regout.map(_.asTypeOf(new DirectoryEntry(params)).in_core === 0.U))//mask which entries are unowned
-  // val phy_vacant_way = MuxCase( params.cache.ways.U, //do a similar thing to the cores for the phy ways, num_ways.U is default //this also needs bypassing...
-  //   regout.zipWithIndex.map { case (way, idx) => 
-  //     (//vacant = not in any partition - has nothing to do with phy state really lol.
-  //       Mux(bypass.way === idx.U && bypass_valid, bypass.data.in_core, way.in_core) === 0.U, idx.U) // need to update bypassed physical info too!
-  //   } //this is not the vacancy logic we want.
-  // ) 
+  //the draft:
+  def rotateLeft[T <: Data](vec: Vec[T], shift: UInt): Vec[T] = {
+    val n = vec.length
+    VecInit(Seq.tabulate(n)(i => vec((i.U + shift) % n.U)))
+  }
 
-  val phy_vacant_way = MuxCase(params.cache.ways.U,
-    regout.zipWithIndex.map { case (way, idx) => //use regout to get right width, idk if we actually need it but ~optimization~ fixes it lol
+
+  val free_ways : Vec[Bool] = VecInit(
+    regout.zipWithIndex.map { case (way, idx) => //use regout to get right width, idk if we actually need it but ~optimization~ fixes it lol, operate per way
       (parrp_table_reg_vec.zipWithIndex.map { case (core_table, core_idx) => //per core
-        //Mux(used_core === core_idx.U, //if this is the core in question
-          Mux((core_idx.U === bypass.core && bypass_valid && bypass.set === set), bypass.parrp_data_vec, //bypass write_core if same set
-          core_table).map{ case (entry) => //per entry in core
-          entry.way_index === idx.U && entry.state =/= ParrpStates.invalid //if the way is in the state table and it's not invalid
-        }.reduce(_ || _) //if any match in this core
-      }.reduce(_ || _) === 0.U, idx.U) //if no match for this way, it is free.
-    } // this is such a nasty mux lmfao
-  ) // AND IT'S STILL WRONG EX DEE
+          Mux(((core_idx.U === bypass.core) && bypass_valid && (bypass.set === set)), bypass.parrp_data_vec, //bypass write_core if same set
+            core_table
+          ).map{ case (entry) => //per entry in core
+            entry.way_index === idx.U && entry.state =/= ParrpStates.invalid //if the way is in the state table and it's not invalid
+        }.reduce(_ || _) //if we match in this core
+      }.reduce(_ || _) === 0.U) //if no match in any core, it is free.
+    })
 
-  // val phy_vacant_way = MuxCase(params.cache.ways.U,
-  //   val freeWays = for (idx <- regout.indices) yield {
-  //     val isWayUsed = parrp_table_reg_vec.indices.map { core_idx =>
-  //       val core_table = parrp_table_reg_vec(core_idx)
-  //       val selectedTable = Mux(used_core === core_idx.U, 
-  //         Mux(used_core === core.U && bypass_valid && bypass.set === set, bypass.parrp_data_vec, core_table), 
-  //         core_table
-  //       )
-        
-  //       selectedTable.map { entry =>
-  //         entry.way_index === idx.U && entry.state =/= ParrpStates.invalid
-  //       }.reduce(_ || _) // if any entry in this core matches
-  //     }.reduce(_ || _) // if any core matches
-      
-  //     Mux(isWayUsed === 0.U, idx.U)
-  //   }
-  // )
+  dontTouch(free_ways)
+  val phy_vacant_way_random = PriorityEncoderOH(
+    rotateLeft(free_ways, victimLFSR) //circular shift victim state for random vacant replacement
+  )  
+  val phy_vacant_way = Cat(rotateLeft(VecInit(phy_vacant_way_random), -victimLFSR).reverse)//undo shift to give us our final victim
+  dontTouch(phy_vacant_way)
 
-  // val phy_vacant_way = MuxCase(params.cache.ways.U,
-  //   //a way is vacant if no partitions own it.
-  //   //a partition owns it if it is in the way_index field and not invalid.
-  //   (regout.zipWithIndex.map { case(way, idx) => //for each way
+  val true_victim = Mux(phy_vacant_way =/= 0.U, OHToUInt(phy_vacant_way), parrp_table_core_vec(parrp_speculated_victim_index).way_index)// get lowest index unowned way (cheapest), could consider random too.
 
-  //   } === 1.U, idx.U)//if set, then index is free
-  // )
-
-  // val phy_vacant_way = MuxCase(params.cache.ways.U,
-  //   phy_unowned_ways.zipWithIndex.map{ case (way, idx) =>
-
-  //   }
-  // )
-
-  //val phy_vacant_way = Cat(regout.map(_.in_core === 0.U))//mask which entries are unowned
-  //val any_unowned = phy_vacant_way.orR //any set mask = we got em
-  val true_victim = Mux(phy_vacant_way =/= params.cache.ways.U, phy_vacant_way, parrp_table_core_vec(parrp_speculated_victim_index).way_index)// get lowest index unowned way (cheapest), could consider random too.
-  // val true_victim = parrp_table_reg_vec(used_core)(parrp_speculated_victim_index).way_index
   //if no unowned, take parrp victim as true victim. should be max parallelism.
   //need to examing more what "unowned" means... this doesn't mean it has no clients, because L2 owns data not in L1 (no clients)
 
@@ -325,11 +303,12 @@ class Directory(params: InclusiveCacheParameters) extends Module
   // //
 
   //write to memory when written
-  when (!ren && wen && (write.bits.core < not_a_core)) { //we will run freely over non-core entities
+  when (!ren && wen && ((write.bits.core < not_a_core) || !wipeDone)) { //we will run freely over non-core entities, but need to wipe regardless of value in write queue.
     cc_parrp.write(
       Mux(wipeDone, write.bits.set, wipeSet), //muxing to do our wiping
-      VecInit.fill(params.sourceIdRanges.size) { Mux(wipeDone, write.bits.parrp_data_vec, wipeVec) },
-      UIntToOH(write.bits.core, params.sourceIdRanges.size).asBools.map(_ || !wipeDone)) //bitmask out for core, or write to all cores during wipe
+      VecInit.fill(params.coreIndexMap.size) { Mux(wipeDone, write.bits.parrp_data_vec, wipeVec) },
+      // VecInit.fill(params.coreIndexMap.size) { Mux(wipeDone, write.bits.parrp_data_vec, VecInit.fill(params.partitionSize){0.U.asTypeOf(new ParrpEntry(params))})}, //maybe this will give me a real wipe vector??
+      UIntToOH(write.bits.core, params.coreIndexMap.size).asBools.map(_ || !wipeDone)) //bitmask out for core, or write to all cores during wipe
   }
 
 
@@ -346,7 +325,8 @@ class Directory(params: InclusiveCacheParameters) extends Module
   io.result.valid := ren2//there is NO reg between read and output, would probably need one if LRU logic depends on hit... maybe always compute replacement?
   io.result.bits.viewAsSupertype(chiselTypeOf(bypass.data)) := Mux(hit, Mux1H(hits, ways), Mux(setQuash && (tagMatch || wayMatch), bypass.data, Mux1H(UIntToOH(true_victim), ways)))
   io.result.bits.hit := hit || (setQuash && tagMatch && bypass.data.state =/= INVALID)
-  val way_final = Mux(hit, OHToUInt(hits), Mux(setQuash && tagMatch, bypass.way, true_victim)) //todo: change the victimWay value to true_victim
+  val way_final = Mux(hit, OHToUInt(hits), Mux(setQuash && tagMatch, bypass.way, true_victim))
+  dontTouch(way_final)
 
   //consider moving this, so we can get its value too, consider 1st cycle. consult profs for IO/logic tradeoff...
   val parrp_hit: Bool = (parrp_table_core_vec.map { case entry => 

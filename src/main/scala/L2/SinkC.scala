@@ -68,6 +68,7 @@ class SinkC(params: InclusiveCacheParameters) extends Module
     io.bs_dat := DontCare
     io.rel_pop.ready := true.B
     io.rel_beat := DontCare
+    io.req.bits.age := DontCare
   } else {
     // No restrictions on the type of buffer/
     val c = params.micro.innerBuf.c(io.c)
@@ -153,6 +154,7 @@ class SinkC(params: InclusiveCacheParameters) extends Module
     io.req.bits.set    := set
     io.req.bits.tag    := tag
     io.req.bits.put    := put
+    io.req.bits.age    := 0.U //age is assigned at scheduler
 
     putbuffer.io.push.bits.index := put
     putbuffer.io.push.bits.data.data    := c.bits.data

@@ -222,6 +222,9 @@ case class InclusiveCacheParameters(
   val partitionSize = cache.ways/(coreIndexMap.size)//should be num cores
 
   println(s"partitionSize: $partitionSize\n")
+
+  val ageBits = log2Ceil(mshrs*mshrs*mshrs*mshrs*3)+1 //some age bound
+
   //==================== END ParRP PARAMS =============================//
 
   def clientBit(source: UInt): UInt = {

@@ -66,6 +66,8 @@ class SourceD(params: InclusiveCacheParameters) extends Module
     val evict_safe = Bool()
     val grant_req  = Flipped(new SourceDHazard(params))
     val grant_safe = Bool()
+
+    val completed_request = Valid(new SourceDRequest(params)) //for letting mshr know when store complete
   })
 
   val beatBytes = params.inner.manager.beatBytes
@@ -285,6 +287,7 @@ class SourceD(params: InclusiveCacheParameters) extends Module
   val s4_need_pb = RegEnable(s3_need_pb, s4_latch)
   val s4_req = RegEnable(s3_req, s4_latch)
   val s4_adjusted_opcode = RegEnable(s3_adjusted_opcode, s4_latch)
+  val s4_last = RegEnable(s3_last, s4_latch)
   val s4_pdata = RegEnable(s3_pdata, s4_latch)
   val s4_rdata = RegEnable(s3_rdata, s4_latch)
 
@@ -335,6 +338,12 @@ class SourceD(params: InclusiveCacheParameters) extends Module
   val s5_req  = RegEnable(s4_req,  retire)
   val s5_beat = RegEnable(s4_beat, retire)
   val s5_dat  = RegEnable(atomics.io.data_out, retire)
+  val s5_last = RegEnable(s4_last, retire)
+  val s5_full = RegNext(s4_last) //this must run every cycle to only be valid once and not latch on retiring  
+
+  io.completed_request.valid := s5_last && s5_full
+  io.completed_request.bits := s5_req
+
 
   val s6_req  = RegEnable(s5_req,  retire)
   val s6_beat = RegEnable(s5_beat, retire)

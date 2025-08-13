@@ -51,6 +51,7 @@ class SinkX(params: InclusiveCacheParameters) extends Module
   io.req.bits.set    := set
   io.req.bits.tag    := tag
   io.req.bits.put    := 0.U
+  io.req.bits.age    := 0.U //age is assigned at scheduler
 
   // clock cycle counter
     val clk_cycle = RegInit(0.U(32.W))

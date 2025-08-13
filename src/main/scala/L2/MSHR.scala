@@ -92,6 +92,8 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     val sinkd     = Flipped(Valid(new SinkDResponse(params)))
     val sinke     = Flipped(Valid(new SinkEResponse(params)))
     val nestedwb  = Flipped(new NestedWriteback(params))
+    val storeack  = Flipped(Bool())
+    val age   = UInt(params.ageBits.W)
   })
 
   val request_valid = RegInit(false.B)
@@ -137,6 +139,8 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   val s_execute        = RegInit(true.B) // D  w_pprobeack, w_grant
   val w_grantack       = RegInit(true.B)
   val s_writeback      = RegInit(true.B) // W  w_*
+  val s_speculativerel = RegInit(true.B) // when we get a dirty release that's not going right back to another L1, wb to main mem for better bound on other reqs
+  val w_store          = RegInit(true.B) //wait for BS to complete
 
   // [1]: We cannot issue outer Acquire while holding blockB (=> outA can stall)
   // However, inB and outC are higher priority than outB, so s_release and s_pprobe
@@ -174,20 +178,22 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   // The w_grantfirst in nestC is necessary to deal with:
   //   acquire waiting for grant, inner release gets queued, outer probe -> inner probe -> deadlock
   // ... this is possible because the release+probe can be for same set, but different tag
+  io.age := request.age //relay req age to outside for arbitration
 
   // We can only demand: block, nest, or queue
   assert (!io.status.bits.nestB || !io.status.bits.blockB)
   assert (!io.status.bits.nestC || !io.status.bits.blockC)
 
   // Scheduler requests
-  val no_wait = w_rprobeacklast && w_releaseack && w_grantlast && w_pprobeacklast && w_grantack
+  val no_wait = w_rprobeacklast && w_releaseack && w_grantlast && w_pprobeacklast && (w_grantack) && s_flush //allow bypassing of waiting on grantack to make requests 1 cycle shorter, nvm this crashes the peekpoke tester LMAO
   io.schedule.bits.a.valid := !s_acquire && s_release && s_pprobe
   io.schedule.bits.b.valid := !s_rprobe || !s_pprobe
-  io.schedule.bits.c.valid := (!s_release && w_rprobeackfirst) || (!s_probeack && w_pprobeackfirst)
+  io.schedule.bits.c.valid := (!s_release && w_rprobeackfirst) || (!s_probeack && w_pprobeackfirst) || (!s_speculativerel && w_store)
   io.schedule.bits.d.valid := !s_execute && w_pprobeack && w_grant
-  io.schedule.bits.e.valid := !s_grantack && w_grantfirst
+  io.schedule.bits.e.valid := !s_grantack && w_grantfirst && s_execute //depend on srcd issue to serialize :)
   io.schedule.bits.x.valid := !s_flush && w_releaseack
-  io.schedule.bits.dir.valid := (!s_release && w_rprobeackfirst) || (!s_writeback && no_wait) // we must complete lru modifications before these conditions are met...
+  // io.schedule.bits.dir.valid := (!s_release && w_rprobeackfirst) || (!s_writeback && no_wait) // we must complete lru modifications before these conditions are met...
+  io.schedule.bits.dir.valid := (!s_writeback && no_wait) // change to serialize directory access for flushes.
   io.schedule.bits.reload := no_wait
   io.schedule.valid := io.schedule.bits.a.valid || io.schedule.bits.b.valid || io.schedule.bits.c.valid ||
                        io.schedule.bits.d.valid || io.schedule.bits.e.valid || io.schedule.bits.x.valid ||
@@ -201,8 +207,9 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     when (s_release && s_pprobe)  { s_acquire    := true.B }
     when (w_releaseack)           { s_flush      := true.B }
     when (w_pprobeackfirst)       { s_probeack   := true.B }
-    when (w_grantfirst)           { s_grantack   := true.B }
-    when (w_pprobeack && w_grant) { s_execute    := true.B }
+    when (w_grantfirst && s_execute){ s_grantack   := true.B }
+    when (w_pprobeack && w_grant) { s_execute    := true.B } //sorry to your nice formatting :(
+    when (w_store)                { s_speculativerel := true.B}
     when (no_wait)                { s_writeback  := true.B }
     // Await the next operation
     when (no_wait) {
@@ -221,7 +228,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   val req_promoteT = req_acquire && Mux(meta.hit, meta_no_clients && meta.state === TIP, gotT)
 
   when (request.prio(2) && (!params.firstLevel).B) { // always a hit
-    final_meta_writeback.dirty   := meta.dirty || request.opcode(0)
+    final_meta_writeback.dirty   := (meta.dirty && (request.opcode =/= 7.U)) || (request.opcode(0) && !request.opcode(1)) //we will be way cleaner now right? only ProbeAckData (0b101) sets us dirty, not ReleaseData (0b111)
     final_meta_writeback.state   := Mux(request.param =/= TtoT && meta.state === TRUNK, TIP, meta.state)
     final_meta_writeback.clients := meta.clients & ~Mux(isToN(request.param), req_clientBit, 0.U)
     final_meta_writeback.hit     := true.B // chained requests are hits
@@ -283,12 +290,15 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   when(meta_valid && request.prio(2) && (request.opcode === 6.U || request.opcode === 7.U)) {// release
     //val new_parrp_data = meta.parrp_data_vec
     new_parrp_data(meta.parrp_way).state := ParrpStates.deallocated //deallocate state, leave the rest of the vec alone!
-    final_meta_writeback.in_core := meta.in_core & ~UIntToOH(meta.core) //remove core from phy owners vec
-    printf(cf"Releasing! in_core = ${final_meta_writeback.in_core}, updated_entry = ${new_parrp_data(meta.parrp_way)}\n")
+    when(request.param < 3.U){final_meta_writeback.in_core := meta.in_core & ~UIntToOH(meta.core)} //remove core from phy owners vec if it is pruning (has no reason to prune to B (param = 0))
+    when((!s_speculativerel && w_store) || (!s_release && w_rprobeackfirst)){ //extra when clause to print less >_>
+      printf(cf"Releasing! in_core = ${final_meta_writeback.in_core}, updated_entry = ${new_parrp_data(meta.parrp_way)}\n") 
+    }
+    // printf(cf"for my sanity: fmw.state = ${final_meta_writeback.state}, m.state = ${meta.state} \n")
   }.elsewhen(meta_valid && !s_release){ //if our request prompts a cache release, we must mark parrp_entry as invalid so it is properly populated with state info.
     new_parrp_data(meta.parrp_way).state := ParrpStates.invalid //set state invalid (may be unneeded idk, depends what else is going on)
     we_released_something := true.B   
-  }.elsewhen(meta_valid){ //for all other valid reqs
+  }.elsewhen(meta_valid && !(meta.parrp_hit && request.prio(0) && (meta.parrp_data_vec(meta.parrp_way).state === ParrpStates.allocated) && (request.opcode(2) && request.opcode(1)))){ //for all other valid reqs, only change L2 state for acquires to lines that are not "in core" as these are supposed to be L1 hits instead!
     // if we hit something in not in core section of partition -> set state to in core, update LRU for all ways.
     meta.parrp_data_vec.zipWithIndex.map { case(d, i) => //collapse lru update map function to save hw later...
       new_parrp_data(i).lru := Mux(d.lru < meta.parrp_data_vec(meta.parrp_way).lru, d.lru + 1.U, d.lru) //parrp way contains either hit or evicted, depending on miss status - but what we do doesn't change!
@@ -302,7 +312,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     // }
     new_parrp_data(meta.parrp_way).lru := 0.U //set updated way lru to 0 as it is MRU
     //replace updated way with new data beyond lru if a miss or overwriting a replaced way
-    when(!meta.parrp_hit || we_released_something){ //when we miss in partition, update partition. Don't care about phy eviction/hit status.
+    when(!meta.parrp_hit || (we_released_something && request.prio(0))){ //when we miss in partition, update partition. Don't care about phy eviction/hit status. Don't update on flush commands (prio(1))
       we_released_something := we_released_something //latch until meta is no longer valid
       new_parrp_data(meta.parrp_way).state := Mux(noncoherent_request, ParrpStates.deallocated, ParrpStates.allocated) //set to deallocated for noncoherent, allocated state for coherent in partition
       new_parrp_data(meta.parrp_way).way_index := meta.way //set index to the phy way we are using (when replaced and not invalid, this way is released from L2 first, but no wb)
@@ -344,13 +354,13 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   io.schedule.bits.b.bits.tag     := Mux(!s_rprobe, meta.tag, request.tag)
   io.schedule.bits.b.bits.set     := request.set
   io.schedule.bits.b.bits.clients := meta.clients & ~excluded_client
-  io.schedule.bits.c.bits.opcode  := Mux(meta.dirty, ReleaseData, Release)
-  io.schedule.bits.c.bits.param   := Mux(meta.state === BRANCH, BtoN, TtoN)
+  io.schedule.bits.c.bits.opcode  := Mux(!s_speculativerel, ReleaseData, Mux(meta.dirty, ReleaseData, Release)) //speculative release is always ReleaseData as it is always dirty -> tbh we should be eliminating the 2nd ReleaseData entirely but hey, being confident is hard
+  io.schedule.bits.c.bits.param   := Mux(!s_speculativerel, TtoT ,Mux(meta.state === BRANCH, BtoN, TtoN)) //speculative release is a report
   io.schedule.bits.c.bits.source  := 0.U
   io.schedule.bits.c.bits.tag     := meta.tag
   io.schedule.bits.c.bits.set     := request.set
   io.schedule.bits.c.bits.way     := meta.way
-  io.schedule.bits.c.bits.dirty   := meta.dirty
+  io.schedule.bits.c.bits.dirty   := Mux(!s_speculativerel, true.B, meta.dirty) //speculative release is always dirty
   io.schedule.bits.d.bits.viewAsSupertype(chiselTypeOf(request)) := request
   io.schedule.bits.d.bits.param   := Mux(!req_acquire, request.param,
                                        MuxLookup(request.param, request.param, Seq(
@@ -416,6 +426,8 @@ class MSHR(params: InclusiveCacheParameters) extends Module
       assert(!(before === from.code && after === to.code), cf"State transition from ${from} to ${to} should be impossible ${cfg}")
     }
   }
+
+  //speculative releases don't change permission states so they don't need an assertion array.
 
   when ((!s_release && w_rprobeackfirst) && io.schedule.ready) {
     eviction(S_BRANCH,    b)      // MMIO read to read-only device
@@ -556,6 +568,9 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   when (io.sinke.valid) {
     w_grantack := true.B
   }
+  when (io.storeack) {
+    w_store := true.B
+  }
 
   // Bootstrap new requests
   val allocate_as_full = WireInit(new FullRequest(params), init = io.allocate.bits)
@@ -624,6 +639,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     s_execute        := true.B
     w_grantack       := true.B
     s_writeback      := true.B
+    s_speculativerel := true.B
 
     // For C channel requests (ie: Release[Data])
     when (new_request.prio(2) && (!params.firstLevel).B) {
@@ -641,12 +657,19 @@ class MSHR(params: InclusiveCacheParameters) extends Module
         s_writeback := false.B
       }
       assert (new_meta.hit)
+      when(new_request.opcode === 7.U && new_meta.state =/= TIP){ //need to speculatively writeback data from a ReleaseData for tighter WCL, leaves us in TIP state after release.
+        // printf(cf"new_meta.state = ${new_meta.state} , meta.state = ${meta.state}, fmw.state = ${final_meta_writeback.state}\n")
+        s_speculativerel := false.B
+        w_releaseack := false.B
+        w_store := false.B
+      }
     }
     // For X channel requests (ie: flush)
     .elsewhen (new_request.control && params.control.B) { // new_request.prio(0)
       s_flush := false.B
       // Do we need to actually do something?
       when (new_meta.hit) {
+        s_writeback := false.B //removed implicit wb from flush, so add it explicity.
         s_release := false.B
         w_releaseack := false.B
         // Do we need to shoot-down inner caches?

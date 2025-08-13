@@ -246,11 +246,19 @@ class Directory(params: InclusiveCacheParameters) extends Module
   // val true_victim = Mux(phy_vacant_way =/= params.cache.ways.U, phy_vacant_way, parrp_table_core_vec(parrp_speculated_victim_index).way_index)// get lowest index unowned way (cheapest), could consider random too.
 
   //the draft:
-  def rotateLeft[T <: Data](vec: Vec[T], shift: UInt): Vec[T] = {
+  def rotateLeft[T <: Data](vec: Vec[T], shift: UInt): Vec[Bool] = {
     val n = vec.length
-    VecInit(Seq.tabulate(n)(i => vec((i.U + shift) % n.U)))
+    val asUInt = vec.asUInt
+    val rotated = (asUInt << shift) | (asUInt >> (n.U - shift))
+    VecInit(rotated(n - 1, 0).asBools) //yeah yeah the type juggling is cringe
   }
 
+  def rotateRight[T <: Data](vec: Vec[T], shift: UInt): Vec[Bool] = {
+    val n = vec.length
+    val asUInt = vec.asUInt
+    val rotated = (asUInt >> shift) | (asUInt << (n.U - shift))
+    VecInit(rotated(n - 1, 0).asBools)
+  }
 
   val free_ways : Vec[Bool] = VecInit(
     regout.zipWithIndex.map { case (way, idx) => //use regout to get right width, idk if we actually need it but ~optimization~ fixes it lol, operate per way
@@ -267,7 +275,7 @@ class Directory(params: InclusiveCacheParameters) extends Module
   val phy_vacant_way_random = PriorityEncoderOH(
     rotateLeft(free_ways, victimLFSR) //circular shift victim state for random vacant replacement
   )  
-  val phy_vacant_way = Cat(rotateLeft(VecInit(phy_vacant_way_random), -victimLFSR).reverse)//undo shift to give us our final victim
+  val phy_vacant_way = Cat(rotateRight(VecInit(phy_vacant_way_random), victimLFSR).reverse)//undo shift to give us our final victim
   dontTouch(phy_vacant_way)
 
   val true_victim = Mux(phy_vacant_way =/= 0.U, OHToUInt(phy_vacant_way), parrp_table_core_vec(parrp_speculated_victim_index).way_index)// get lowest index unowned way (cheapest), could consider random too.

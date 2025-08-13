@@ -87,6 +87,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
     m.io.sinkd.bits := sinkD.io.resp.bits
     m.io.sinke.bits := sinkE.io.resp.bits
     m.io.nestedwb := nestedwb
+    m.io.storeack := sourceD.io.completed_request.valid && (sourceD.io.completed_request.bits.source === m.io.schedule.bits.d.bits.source)
   }
 
   // If the pre-emption BC or C MSHR have a matching set, the normal MSHR must be blocked
@@ -119,17 +120,34 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   }.reverse)
 
   // Round-robin arbitration of MSHRs
-  val robin_filter = RegInit(0.U(params.mshrs.W))
-  val robin_request = Cat(mshr_request, mshr_request & robin_filter)
-  val mshr_selectOH2 = ~(leftOR(robin_request) << 1) & robin_request
-  val mshr_selectOH = mshr_selectOH2(2*params.mshrs-1, params.mshrs) | mshr_selectOH2(params.mshrs-1, 0)
-  val mshr_select = OHToUInt(mshr_selectOH)
+  // val robin_filter = RegInit(0.U(params.mshrs.W))
+  // val robin_request = Cat(mshr_request, mshr_request & robin_filter)
+  // val mshr_selectOH2 = ~(leftOR(robin_request) << 1) & robin_request
+  // val mshr_selectOH = mshr_selectOH2(2*params.mshrs-1, params.mshrs) | mshr_selectOH2(params.mshrs-1, 0)
+  // val mshr_select = OHToUInt(mshr_selectOH)
+  // val schedule = Mux1H(mshr_selectOH, mshrs.map(_.io.schedule.bits))
+  // val scheduleTag = Mux1H(mshr_selectOH, mshrs.map(_.io.status.bits.tag))
+  // val scheduleSet = Mux1H(mshr_selectOH, mshrs.map(_.io.status.bits.set))
+  // when (mshr_request.orR) { robin_filter := ~rightOR(mshr_selectOH) } // When an MSHR wins the schedule, it has lowest priority next time
+
+  // Age arbiter
+  val age_counter = RegInit(0.U(params.ageBits.W)) //some very conservative bound LOL K^4*3
+  age_counter := age_counter - 1.U //increase by 1 per clock cycle
+  val mshr_ages = mshrs.map { m =>
+    Mux(m.io.schedule.valid, 
+    Mux(m.io.age(params.ageBits-1) === age_counter(params.ageBits-1), Cat(1.U, m.io.age(params.ageBits-2, 0)), Cat(0.U, m.io.age(params.ageBits-2, 0))),
+    0.U)
+  }
+  val oldest_mshr = mshr_ages.zipWithIndex.map {case (data, idx) => 
+    (data, idx.U)}.reduce { (a, b) =>
+    MuxT(a._1 > b._1, a, b) //collapse mshr vector to get oldest req, oldest req has largest age. 
+  }._2
+  val mshr_select = oldest_mshr
+  val mshr_selectOH = UIntToOH(oldest_mshr, params.mshrs)//fix width so prio stacks work right.
   val schedule = Mux1H(mshr_selectOH, mshrs.map(_.io.schedule.bits))
   val scheduleTag = Mux1H(mshr_selectOH, mshrs.map(_.io.status.bits.tag))
   val scheduleSet = Mux1H(mshr_selectOH, mshrs.map(_.io.status.bits.set))
 
-  // When an MSHR wins the schedule, it has lowest priority next time
-  when (mshr_request.orR) { robin_filter := ~rightOR(mshr_selectOH) }
 
   // Fill in which MSHR sends the request
   schedule.a.bits.source := mshr_select
@@ -173,6 +191,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   request.valid := directory.io.ready && (sinkA.io.req.valid || sinkX.io.req.valid || sinkC.io.req.valid)
   request.bits := Mux(sinkC.io.req.valid, sinkC.io.req.bits,
                   Mux(sinkX.io.req.valid, sinkX.io.req.bits, sinkA.io.req.bits))
+  request.bits.age := age_counter //finally set age counter in scheduler
   sinkC.io.req.ready := directory.io.ready && request.ready
   sinkX.io.req.ready := directory.io.ready && request.ready && !sinkC.io.req.valid
   sinkA.io.req.ready := directory.io.ready && request.ready && !sinkC.io.req.valid && !sinkX.io.req.valid
@@ -285,6 +304,15 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
       OHToUInt(lowerMatches1 << params.mshrs*1),
       OHToUInt(lowerMatches1 << params.mshrs*2)))
 
+  val mshr_insertOH = ~(leftOR(~mshr_validOH) << 1) & ~mshr_validOH & prioFilter
+  (mshr_insertOH.asBools zip mshrs) map { case (s, m) =>
+    when (request.valid && alloc && s && !mshr_uses_directory_assuming_no_bypass) {
+      m.io.allocate.valid := true.B
+      m.io.allocate.bits.viewAsSupertype(chiselTypeOf(request.bits)) := request.bits
+      m.io.allocate.bits.repeat := false.B
+    }
+  }
+
   when (bypass) { //printfs to track allocation/mshr hits
     when (sinkA.io.req.valid) {
         printf(cf"@ clk_cycle ${clk_cycle}: Req from A passed to MSHR ${mshr_select} due to hit on set ${request.bits.set}\n")
@@ -294,18 +322,9 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
         printf(cf"@ clk_cycle ${clk_cycle}: Req from X passed to MSHR ${mshr_select} due to hit on set ${request.bits.set}\n")
     }
   }.elsewhen (alloc & request.valid) {
-      printf(cf"@ clk_cycle ${clk_cycle}: Allocating MSHR ${mshr_select} For Request!\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: Allocating MSHR ${OHToUInt(mshr_insertOH)} For Request!\n")
   }.elsewhen (queue & request.valid) {
-      printf(cf"@ clk_cycle ${clk_cycle}: Queuing to MSHR ${mshr_select} For Request!\n")
-  }
-
-  val mshr_insertOH = ~(leftOR(~mshr_validOH) << 1) & ~mshr_validOH & prioFilter
-  (mshr_insertOH.asBools zip mshrs) map { case (s, m) =>
-    when (request.valid && alloc && s && !mshr_uses_directory_assuming_no_bypass) {
-      m.io.allocate.valid := true.B
-      m.io.allocate.bits.viewAsSupertype(chiselTypeOf(request.bits)) := request.bits
-      m.io.allocate.bits.repeat := false.B
-    }
+      printf(cf"@ clk_cycle ${clk_cycle}: Queuing to MSHR ${OHToUInt(lowerMatches1)} For Request!\n")
   }
 
   when (request.valid && nestB && !bc_mshr.io.status.valid && !c_mshr.io.status.valid && !mshr_uses_directory_assuming_no_bypass) {

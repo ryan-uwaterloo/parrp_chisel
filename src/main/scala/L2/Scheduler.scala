@@ -133,17 +133,17 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   // Age arbiter
   val age_counter = RegInit(0.U(params.ageBits.W)) //some very conservative bound LOL K^4*3
   age_counter := age_counter - 1.U //increase by 1 per clock cycle
-  val mshr_ages = mshrs.map { m =>
-    Mux(m.io.schedule.valid, 
-    Mux(m.io.age(params.ageBits-1) === age_counter(params.ageBits-1), Cat(1.U, m.io.age(params.ageBits-2, 0)), Cat(0.U, m.io.age(params.ageBits-2, 0))),
+  val mshr_ages = mshrs.zipWithIndex.map { case (m, i) =>
+    Mux(mshr_request(i), 
+    Mux(m.io.age(params.ageBits-1) === age_counter(params.ageBits-1), Cat(0.U, m.io.age(params.ageBits-2, 0)), Cat(1.U, m.io.age(params.ageBits-2, 0))),
     0.U)
   }
   val oldest_mshr = mshr_ages.zipWithIndex.map {case (data, idx) => 
     (data, idx.U)}.reduce { (a, b) =>
-    MuxT(a._1 > b._1, a, b) //collapse mshr vector to get oldest req, oldest req has largest age. 
+    MuxT(a._1 > b._1, a, b) //collapse mshr vector to get oldest req, oldest req has largest age.
   }._2
   val mshr_select = oldest_mshr
-  val mshr_selectOH = UIntToOH(oldest_mshr, params.mshrs)//fix width so prio stacks work right.
+  val mshr_selectOH = UIntToOH(oldest_mshr, params.mshrs) & Cat(mshrs.map(_.io.schedule.valid).reverse) //fix width so prio stacks work right. Allow for no mshr to be selected.
   val schedule = Mux1H(mshr_selectOH, mshrs.map(_.io.schedule.bits))
   val scheduleTag = Mux1H(mshr_selectOH, mshrs.map(_.io.status.bits.tag))
   val scheduleSet = Mux1H(mshr_selectOH, mshrs.map(_.io.status.bits.set))

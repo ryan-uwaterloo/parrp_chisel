@@ -163,6 +163,7 @@ case class InclusiveCacheParameters(
   val putLists = micro.memCycles // allow every request to be single beat
   val putBeats = max(2*cache.blockBeats, micro.memCycles)
   val relLists = 2
+  // val relLists = mshrs //2 //changed to avoid backpressure.
   val relBeats = relLists*cache.blockBeats
 
   val flatAddresses = AddressSet.unify(outer.manager.managers.flatMap(_.address))
@@ -210,6 +211,7 @@ case class InclusiveCacheParameters(
     ranges.map(_.sourceId).map(range => (range, coreIndexMap(core).U(coreBits.W)))//I sure HOPE this translation works LOL
   }.toSeq
 
+  // println(s"innerBeatBits: $innerBeatBits\n")
   println(s"coreIndexMap: $coreIndexMap\n")
   println(s"GroupedByCore: $groupedByCore\n")
   println(s"SourceIdRanges: $sourceIdRanges\n")

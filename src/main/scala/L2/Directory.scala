@@ -35,6 +35,7 @@ class DirectoryEntry(params: InclusiveCacheParameters) extends InclusiveCacheBun
   val clients = UInt(params.clientBits.W)
   val tag     = UInt(params.tagBits.W)
   val in_core = UInt(params.coreIndexMap.size.W) //teehee I might make a coreBits later
+  val modified_cores = UInt(params.coreIndexMap.size.W)
 }
 
 class DirectoryWrite(params: InclusiveCacheParameters) extends InclusiveCacheBundle(params)
@@ -340,7 +341,7 @@ class Directory(params: InclusiveCacheParameters) extends Module
   val parrp_hit: Bool = (parrp_table_core_vec.map { case entry => 
     (entry.way_index === way_final) && (entry.state =/= ParrpStates.invalid) && (!setQuash || entry.way_index =/= bypass.way)
   }.reduce(_ || _)) //is our target way in our parrp partition? indep of phy cache.
-  //this is just wrong
+
   io.result.bits.parrp_hit := parrp_hit
 
 

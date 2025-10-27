@@ -232,6 +232,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     final_meta_writeback.state   := Mux(request.param =/= TtoT && meta.state === TRUNK, TIP, meta.state)
     final_meta_writeback.clients := meta.clients & ~Mux(isToN(request.param), req_clientBit, 0.U)
     final_meta_writeback.hit     := true.B // chained requests are hits
+    final_meta_writeback.modified_cores := meta.modified_cores & ~req_clientBit //remove set bit from modified cores
     // printf(cf"using prio2 client update! fmw.clients = ${final_meta_writeback.clients}, meta.clients = ${meta.clients}, isToN = ${isToN(request.param)}, param = ${request.param}, req_clientBit = ${req_clientBit}\n")
   } .elsewhen (request.control && params.control.B) { // request.prio(0)
     when (meta.hit) {
@@ -281,7 +282,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     // isolate lru state of hit way in clk1 
     // update lrus in clk2?
   //cases and stuff:
-    // if we demote something due to an explicit release -> change state to not in core, leave LRU info unchanged.
+    // if we demote something due to an explicit release -> change state to not in core, | if it is a releaseData or was previously dirty, update LRU. Else, leave info unchanged.
   val new_parrp_data = Wire(Vec(params.partitionSize, new ParrpEntry(params)))
   val we_released_something = Reg(Bool()) //surely a flag is disgusting enough to work LOL
   val noncoherent_request = request.prio(0) && (request.opcode === 0.U || request.opcode === 1.U || request.opcode === 4.U || request.opcode === 5.U)//a put or a get (or an intent) on A channel are non-coherent requests
@@ -293,6 +294,15 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     when(request.param < 3.U){final_meta_writeback.in_core := meta.in_core & ~UIntToOH(meta.core)} //remove core from phy owners vec if it is pruning (has no reason to prune to B (param = 0))
     when((!s_speculativerel && w_store) || (!s_release && w_rprobeackfirst)){ //extra when clause to print less >_>
       printf(cf"Releasing! in_core = ${final_meta_writeback.in_core}, updated_entry = ${new_parrp_data(meta.parrp_way)}\n") 
+    }
+
+    when((request.opcode === 7.U && meta.state =/= TIP) || (request.opcode === 6.U && meta.state === INVALID && Cat(0.U, meta.modified_cores)(meta.core))) { //this is the conditions under which we update LRU (as they represent a store)
+      meta.parrp_data_vec.zipWithIndex.map { case(d, i) =>
+        new_parrp_data(i).lru := Mux(d.lru < meta.parrp_data_vec(meta.parrp_way).lru, d.lru + 1.U, d.lru) //parrp way contains stored way
+      }
+
+      new_parrp_data(meta.parrp_way).lru := 0.U //set stored way to MRU
+      printf(cf"Updated LRU due to store! New LRU = ${new_parrp_data}\n")
     }
     // printf(cf"for my sanity: fmw.state = ${final_meta_writeback.state}, m.state = ${meta.state} \n")
   }.elsewhen(meta_valid && !s_release){ //if our request prompts a cache release, we must mark parrp_entry as invalid so it is properly populated with state info.
@@ -337,6 +347,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   invalid.clients := 0.U
   invalid.tag     := 0.U
   invalid.in_core := 0.U
+  invalid.modified_cores := 0.U
 
   // Just because a client says BtoT, by the time we process the request he may be N.
   // Therefore, we must consult our own meta-data state to confirm he owns the line still.
@@ -546,7 +557,10 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     params.ccover(!set_pprobeack && w_rprobeackfirst, "MSHR_PROBE_SERIAL", "Sequential routing of probe response data")
     params.ccover( set_pprobeack && w_rprobeackfirst, "MSHR_PROBE_WORMHOLE", "Wormhole routing of probe response data")
     // However, meta-data updates need to be done more cautiously
-    when (meta.state =/= INVALID && io.sinkc.bits.tag === meta.tag && io.sinkc.bits.data) { meta.dirty := true.B } // !!!
+    when (meta.state =/= INVALID && io.sinkc.bits.tag === meta.tag && io.sinkc.bits.data) { 
+      meta.dirty := true.B 
+      meta.modified_cores := meta.modified_cores & probe_bit // set modified bit on ProbeAckData
+    } // !!!
   }
   when (io.sinkd.valid) {
     when (io.sinkd.bits.opcode === Grant || io.sinkd.bits.opcode === GrantData) {
@@ -657,7 +671,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
         s_writeback := false.B
       }
       assert (new_meta.hit)
-      when(new_request.opcode === 7.U && new_meta.state =/= TIP){ //need to speculatively writeback data from a ReleaseData for tighter WCL, leaves us in TIP state after release.
+      when((new_request.opcode === 7.U && new_meta.state =/= TIP) || (new_request.opcode === 6.U && new_meta.state === INVALID && Cat(0.U, new_meta.modified_cores)(new_meta.core) && ((new_meta.modified_cores ^ new_clientBit) === 0.U)) ){ //need to speculatively writeback data from a ReleaseData for tighter WCL, leaves us in TIP state after release.
         // printf(cf"new_meta.state = ${new_meta.state} , meta.state = ${meta.state}, fmw.state = ${final_meta_writeback.state}\n")
         s_speculativerel := false.B
         w_releaseack := false.B

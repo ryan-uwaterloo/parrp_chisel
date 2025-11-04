@@ -185,7 +185,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   assert (!io.status.bits.nestC || !io.status.bits.blockC)
 
   // Scheduler requests
-  val no_wait = w_rprobeacklast && w_releaseack && w_grantlast && w_pprobeacklast && (w_grantack) && s_flush //allow bypassing of waiting on grantack to make requests 1 cycle shorter, nvm this crashes the peekpoke tester LMAO
+  val no_wait = w_rprobeacklast && w_releaseack && w_grantlast && w_pprobeacklast && (w_grantack) && s_flush && s_execute //allow bypassing of waiting on grantack to make requests 1 cycle shorter, nvm this crashes the peekpoke tester LMAO
   io.schedule.bits.a.valid := !s_acquire && s_release && s_pprobe
   io.schedule.bits.b.valid := !s_rprobe || !s_pprobe
   io.schedule.bits.c.valid := (!s_release && w_rprobeackfirst) || (!s_probeack && w_pprobeackfirst) || (!s_speculativerel && w_store)

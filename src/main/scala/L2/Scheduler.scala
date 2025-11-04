@@ -192,6 +192,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   request.bits := Mux(sinkC.io.req.valid, sinkC.io.req.bits,
                   Mux(sinkX.io.req.valid, sinkX.io.req.bits, sinkA.io.req.bits))
   request.bits.age := age_counter //finally set age counter in scheduler
+  // make this inherit the age if nesting...
   sinkC.io.req.ready := directory.io.ready && request.ready
   sinkX.io.req.ready := directory.io.ready && request.ready && !sinkC.io.req.valid
   sinkA.io.req.ready := directory.io.ready && request.ready && !sinkC.io.req.valid && !sinkX.io.req.valid
@@ -336,6 +337,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   bc_mshr.io.allocate.bits.prio(0) := false.B
 
   when (request.valid && nestC && !c_mshr.io.status.valid && !mshr_uses_directory_assuming_no_bypass) {
+    request.bits.age := Mux1H(setMatches, mshrs.map(_.io.age)) //inherit age priority from matching MSHR to ensure no priority inversion.
     c_mshr.io.allocate.valid := true.B
     c_mshr.io.allocate.bits.viewAsSupertype(chiselTypeOf(request.bits)) := request.bits
     c_mshr.io.allocate.bits.repeat := false.B

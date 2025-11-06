@@ -73,8 +73,8 @@ class SinkC(params: InclusiveCacheParameters) extends Module
     // No restrictions on the type of buffer/
     val c = params.micro.innerBuf.c(io.c)
 
-    val c_queue = Wire(chiselTypeOf(io.req))
-    io.req <> Queue(c_queue, params.mshrs, pipe=true) //this should be smaller by some bound, probably :)
+    // val c_queue = Wire(chiselTypeOf(io.req))
+    // io.req <> Queue(c_queue, params.mshrs, pipe=true) //this should be smaller by some bound, probably :)
 
     val (tag, set, offset) = params.parseAddress(c.bits.address)
     val (first, last, _, beat) = params.inner.count(c)
@@ -131,8 +131,8 @@ class SinkC(params: InclusiveCacheParameters) extends Module
     val freeOH = ~(leftOR(~lists) << 1) & ~lists
     val freeIdx = OHToUInt(freeOH)
 
-    val req_block = first && !c_queue.ready
-    // val req_block = first && !io.req.ready
+    // val req_block = first && !c_queue.ready
+    val req_block = first && !io.req.ready
     val buf_block = hasData && !putbuffer.io.push.ready
     val set_block = hasData && first && !free
 
@@ -140,38 +140,38 @@ class SinkC(params: InclusiveCacheParameters) extends Module
     params.ccover(c.valid && !raw_resp && buf_block, "SINKC_BUF_STALL", "No space in putbuffer for beat")
     params.ccover(c.valid && !raw_resp && set_block, "SINKC_SET_STALL", "No space in putbuffer for request")
 
-    // c.ready := Mux(raw_resp, !hasData || bs_adr.ready, !req_block && !buf_block && !set_block)
-    c.ready := Mux(raw_resp, !hasData || bs_adr.ready, c_queue.ready)//!req_block && !buf_block && !set_block) -> change ready conditions to queue having space.
+    c.ready := Mux(raw_resp, !hasData || bs_adr.ready, !req_block && !buf_block && !set_block)
+    // c.ready := Mux(raw_resp, !hasData || bs_adr.ready, c_queue.ready)//!req_block && !buf_block && !set_block) -> change ready conditions to queue having space.
 
-    // io.req.valid := !resp && c.valid && first && !buf_block && !set_block
-    c_queue.valid := !resp && c.valid && first && !buf_block && !set_block
+    io.req.valid := !resp && c.valid && first && !buf_block && !set_block
+    // c_queue.valid := !resp && c.valid && first && !buf_block && !set_block
     putbuffer.io.push.valid := !resp && c.valid && hasData && !req_block && !set_block
     when (!resp && c.valid && first && hasData && !req_block && !buf_block) { lists_set := freeOH }
 
     val put = Mux(first, freeIdx, RegEnable(freeIdx, first))
 
-    c_queue.bits.prio   := VecInit(4.U(3.W).asBools)
-    c_queue.bits.control:= false.B
-    c_queue.bits.opcode := c.bits.opcode
-    c_queue.bits.param  := c.bits.param
-    c_queue.bits.size   := c.bits.size
-    c_queue.bits.source := c.bits.source
-    c_queue.bits.offset := offset
-    c_queue.bits.set    := set
-    c_queue.bits.tag    := tag
-    c_queue.bits.put    := put
-    c_queue.bits.age    := 0.U //age is assigned at scheduler
-    // io.req.bits.prio   := VecInit(4.U(3.W).asBools)
-    // io.req.bits.control:= false.B
-    // io.req.bits.opcode := c.bits.opcode
-    // io.req.bits.param  := c.bits.param
-    // io.req.bits.size   := c.bits.size
-    // io.req.bits.source := c.bits.source
-    // io.req.bits.offset := offset
-    // io.req.bits.set    := set
-    // io.req.bits.tag    := tag
-    // io.req.bits.put    := put
-    // io.req.bits.age    := 0.U //age is assigned at scheduler
+    // c_queue.bits.prio   := VecInit(4.U(3.W).asBools)
+    // c_queue.bits.control:= false.B
+    // c_queue.bits.opcode := c.bits.opcode
+    // c_queue.bits.param  := c.bits.param
+    // c_queue.bits.size   := c.bits.size
+    // c_queue.bits.source := c.bits.source
+    // c_queue.bits.offset := offset
+    // c_queue.bits.set    := set
+    // c_queue.bits.tag    := tag
+    // c_queue.bits.put    := put
+    // c_queue.bits.age    := 0.U //age is assigned at scheduler
+    io.req.bits.prio   := VecInit(4.U(3.W).asBools)
+    io.req.bits.control:= false.B
+    io.req.bits.opcode := c.bits.opcode
+    io.req.bits.param  := c.bits.param
+    io.req.bits.size   := c.bits.size
+    io.req.bits.source := c.bits.source
+    io.req.bits.offset := offset
+    io.req.bits.set    := set
+    io.req.bits.tag    := tag
+    io.req.bits.put    := put
+    io.req.bits.age    := 0.U //age is assigned at scheduler
 
 
     putbuffer.io.push.bits.index := put

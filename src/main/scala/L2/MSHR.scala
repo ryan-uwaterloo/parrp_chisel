@@ -174,10 +174,12 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   // The above rules ensure we will block and not nest an outer probe while still doing our
   // own inner probes. Thus every probe wakes exactly one MSHR.
   io.status.bits.blockC := !meta_valid
-  io.status.bits.nestC  := meta_valid && (!w_rprobeackfirst || !w_pprobeackfirst || !w_grantfirst)
+  // io.status.bits.nestC  := meta_valid && (!w_rprobeackfirst || !w_pprobeackfirst || !w_grantfirst)
+  io.status.bits.nestC  := meta_valid && (!w_rprobeacklast || !w_pprobeacklast) //if there are ANY outstanding probes, we must assume that the release needs to be handled out of band.
   // The w_grantfirst in nestC is necessary to deal with:
   //   acquire waiting for grant, inner release gets queued, outer probe -> inner probe -> deadlock
   // ... this is possible because the release+probe can be for same set, but different tag
+  // ...... this all depends on cache not being last level - which it is in this design. So, disregard.
   io.age := request.age //relay req age to outside for arbitration
 
   // We can only demand: block, nest, or queue

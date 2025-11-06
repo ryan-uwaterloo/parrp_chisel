@@ -162,8 +162,8 @@ case class InclusiveCacheParameters(
   val secondary = max(mshrs, micro.memCycles - mshrs)
   val putLists = micro.memCycles // allow every request to be single beat
   val putBeats = max(2*cache.blockBeats, micro.memCycles)
-  val relLists = 2
-  // val relLists = mshrs //2 //changed to avoid backpressure.
+  // val relLists = 2
+  val relLists = mshrs //2 //changed to avoid backpressure.
   val relBeats = relLists*cache.blockBeats
 
   val flatAddresses = AddressSet.unify(outer.manager.managers.flatMap(_.address))

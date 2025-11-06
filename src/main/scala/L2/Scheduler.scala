@@ -78,6 +78,12 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   val c_mshr = mshrs.last
   val nestedwb = Wire(new NestedWriteback(params))
 
+  val c_rpq_in = Wire(chiselTypeOf(sinkC.io.req))
+  val c_rpq_out = Wire(chiselTypeOf(sinkC.io.req))
+  c_rpq_out <> Queue(c_rpq_in, params.mshrs, pipe=false)
+  c_rpq_in.valid := false.B
+  c_rpq_in.bits  := DontCare
+
   // Deliver messages from Sinks to MSHRs
   mshrs.zipWithIndex.foreach { case (m, i) =>
     m.io.sinkc.valid := sinkC.io.resp.valid && sinkC.io.resp.bits.set === m.io.status.bits.set
@@ -186,16 +192,8 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   nestedwb.b_clr_dirty := select_bc && bc_mshr.io.schedule.bits.dir.valid
   nestedwb.c_set_dirty := select_c  &&  c_mshr.io.schedule.bits.dir.valid && c_mshr.io.schedule.bits.dir.bits.data.dirty
 
-  // Pick highest priority request
+  // request wire declaration
   val request = Wire(Decoupled(new FullRequest(params)))
-  request.valid := directory.io.ready && (sinkA.io.req.valid || sinkX.io.req.valid || sinkC.io.req.valid)
-  request.bits := Mux(sinkC.io.req.valid, sinkC.io.req.bits,
-                  Mux(sinkX.io.req.valid, sinkX.io.req.bits, sinkA.io.req.bits))
-  request.bits.age := age_counter //finally set age counter in scheduler
-  // make this inherit the age if nesting...
-  sinkC.io.req.ready := directory.io.ready && request.ready
-  sinkX.io.req.ready := directory.io.ready && request.ready && !sinkC.io.req.valid
-  sinkA.io.req.ready := directory.io.ready && request.ready && !sinkC.io.req.valid && !sinkX.io.req.valid
 
   // If no MSHR has been assigned to this set, we need to allocate one
   val setMatches = Cat(mshrs.map { m => m.io.status.valid && m.io.status.bits.set === request.bits.set }.reverse)
@@ -206,7 +204,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   // If a same-set MSHR says that requests of this type must be handled out-of-band, use special BC|C MSHR
   // ... these special MSHRs interlock the MSHR that said it should be pre-empted.
   val nestB  = Mux1H(setMatches, mshrs.map(_.io.status.bits.nestB))  && request.bits.prio(1)
-  val nestC  = Mux1H(setMatches, mshrs.map(_.io.status.bits.nestC))  && request.bits.prio(2)
+  val nestC  = Mux1H(setMatches, mshrs.map(_.io.status.bits.nestC))  && request.bits.prio(2) //mux1H takes last MSHR that matches, so it'll report the status of the c_mshr if there is already a req queued there
   // Prevent priority inversion; we may not queue to MSHRs beyond our level
   val prioFilter = Cat(request.bits.prio(2), !request.bits.prio(0), ~0.U((params.mshrs-2).W))
   val lowerMatches = setMatches & prioFilter
@@ -280,6 +278,19 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   // Is there an MSHR free for this request?
   val mshr_validOH = Cat(mshrs.map(_.io.status.valid).reverse)
   val mshr_free = (~mshr_validOH & prioFilter).orR
+  val c_mshr_free = (~mshr_validOH).orR
+
+  // Pick highest priority request
+  request.valid := directory.io.ready && (sinkA.io.req.valid || sinkX.io.req.valid || sinkC.io.req.valid)
+  request.bits := Mux(c_rpq_out.valid && c_mshr_free, c_rpq_out.bits, //c_rpq > c > x > a
+                    Mux(sinkC.io.req.valid, sinkC.io.req.bits,
+                      Mux(sinkX.io.req.valid, sinkX.io.req.bits, 
+                        sinkA.io.req.bits)))
+  request.bits.age := age_counter //finally set age counter in scheduler
+  c_rpq_out.ready    := directory.io.ready && request.ready && c_mshr_free //only assert ready when mshr_free or something
+  sinkC.io.req.ready := directory.io.ready && request.ready && !(c_rpq_out.valid && c_mshr_free) //enforce static priority
+  sinkX.io.req.ready := directory.io.ready && request.ready && !sinkC.io.req.valid && !(c_rpq_out.valid && c_mshr_free)
+  sinkA.io.req.ready := directory.io.ready && request.ready && !sinkC.io.req.valid && !sinkX.io.req.valid && !(c_rpq_out.valid && c_mshr_free)
 
   // Fanout the request to the appropriate handler (if any)
   val bypassQueue = schedule.reload && bypassMatches
@@ -287,7 +298,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
      (alloc && !mshr_uses_directory_assuming_no_bypass && mshr_free) ||
      (nestB && !mshr_uses_directory_assuming_no_bypass && !bc_mshr.io.status.valid && !c_mshr.io.status.valid) ||
      (nestC && !mshr_uses_directory_assuming_no_bypass && !c_mshr.io.status.valid)
-  request.ready := request_alloc_cases || (queue && (bypassQueue || requests.io.push.ready))
+  request.ready := request_alloc_cases || (queue && (bypassQueue || requests.io.push.ready)) || (nestC && requests.io.push.ready)
   val alloc_uses_directory = request.valid && request_alloc_cases
 
   // When a request goes through, it will need to hit the Directory
@@ -297,13 +308,14 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   directory.io.read.bits.sourceId := Mux(mshr_uses_directory_for_lb, requests.io.data.source, request.bits.source) //need to pass in source
 
   // Enqueue the request if not bypassed directly into an MSHR
-  requests.io.push.valid := request.valid && queue && !bypassQueue
+  requests.io.push.valid := (request.valid && queue && !bypassQueue) || (nestC && c_mshr.io.status.valid)//queue any bypassed request while bypass is busy to the bypass mshr!
   requests.io.push.bits.data  := request.bits
-  requests.io.push.bits.index := Mux1H(
+  requests.io.push.bits.data.age := Mux(nestC, Mux1H(setMatches, mshrs.map(_.io.age)), request.bits.age) //inherit priority if this is a nested request
+  requests.io.push.bits.index := Mux(nestC, 1.U << (params.mshrs*3-1), Mux1H( //if nestC, it will go to queue for c_mshr, regardless of setmatching.
     request.bits.prio, Seq(
       OHToUInt(lowerMatches1 << params.mshrs*0),
       OHToUInt(lowerMatches1 << params.mshrs*1),
-      OHToUInt(lowerMatches1 << params.mshrs*2)))
+      OHToUInt(lowerMatches1 << params.mshrs*2))))
 
   val mshr_insertOH = ~(leftOR(~mshr_validOH) << 1) & ~mshr_validOH & prioFilter
   (mshr_insertOH.asBools zip mshrs) map { case (s, m) =>
@@ -346,6 +358,11 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   }
   c_mshr.io.allocate.bits.prio(0) := false.B
   c_mshr.io.allocate.bits.prio(1) := false.B
+
+  when (request.valid && alloc && !mshr_free && request.bits.prio(2)) { //when we get a Release[Data] that is stuck waiting on a residual, add it to the c replay queue
+    c_rpq_in.bits := request.bits
+    c_rpq_in.valid := true.B
+  }
 
   // Fanout the result of the Directory lookup
   val dirTarget = Mux(alloc, mshr_insertOH, Mux(nestB,(BigInt(1) << (params.mshrs-2)).U,(BigInt(1) << (params.mshrs-1)).U))

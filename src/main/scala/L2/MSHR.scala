@@ -304,7 +304,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
       }
 
       new_parrp_data(meta.parrp_way).lru := 0.U //set stored way to MRU
-      printf(cf"Updated LRU due to store! New LRU = ${new_parrp_data}\n")
+      // printf(cf"Updated LRU due to store! New LRU = ${new_parrp_data}\n")
     }
     // printf(cf"for my sanity: fmw.state = ${final_meta_writeback.state}, m.state = ${meta.state} \n")
   }.elsewhen(meta_valid && !s_release){ //if our request prompts a cache release, we must mark parrp_entry as invalid so it is properly populated with state info.
@@ -561,7 +561,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     // However, meta-data updates need to be done more cautiously
     when (meta.state =/= INVALID && io.sinkc.bits.tag === meta.tag && io.sinkc.bits.data) { 
       meta.dirty := true.B 
-      meta.modified_cores := meta.modified_cores & probe_bit // set modified bit on ProbeAckData
+      meta.modified_cores := meta.modified_cores | probe_bit // set modified bit on ProbeAckData
     } // !!!
   }
   when (io.sinkd.valid) {

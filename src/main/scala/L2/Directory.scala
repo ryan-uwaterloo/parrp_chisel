@@ -216,21 +216,21 @@ class Directory(params: InclusiveCacheParameters) extends Module
 
   val parrp_table_core_vec = Mux((used_core === bypass.core && bypass_valid && bypass.set === set), bypass.parrp_data_vec, parrp_table_reg_vec(used_core)) // make this a mux to allow for bypassing of parrp_table into raw read before processing
 
-  val updated_lru_vec = VecInit(parrp_table_core_vec.map { parrp_entry => //this is the table of just the core, a vec of parrp_entries
-    // this table will need a type definition or else I'm worried about bit width sizing.
-    val new_entry = Wire(new ParrpEntry(params))
-    new_entry.lru := Mux(parrp_entry.state === ParrpStates.invalid, (params.partitionSize - 1).U, //if invalid, set val to max_val
-      Mux(parrp_entry.state === ParrpStates.deallocated, parrp_entry.lru, 0.U)) //if not in core, store lru state. if in core, do not evict.
+  // val updated_lru_vec = VecInit(parrp_table_core_vec.map { parrp_entry => //this is the table of just the core, a vec of parrp_entries
+  //   // this table will need a type definition or else I'm worried about bit width sizing.
+  //   val new_entry = Wire(new ParrpEntry(params))
+  //   new_entry.lru := Mux(parrp_entry.state === ParrpStates.invalid, (params.partitionSize - 1).U, //if invalid, set val to max_val
+  //     Mux(parrp_entry.state === ParrpStates.deallocated, parrp_entry.lru, 0.U)) //if not in core, store lru state. if in core, do not evict.
         
-    new_entry.way_index := parrp_entry.way_index //don't change way indices
-    new_entry.state := parrp_entry.state
+  //   new_entry.way_index := parrp_entry.way_index //don't change way indices
+  //   new_entry.state := parrp_entry.state
       
-    new_entry //return new entry
-  })//wrap the whole thing in a vec
+  //   new_entry //return new entry
+  // })//wrap the whole thing in a vec
 
-  val parrp_speculated_victim_index: UInt = updated_lru_vec.zipWithIndex.map{case (data, idx) => 
+  val parrp_speculated_victim_index: UInt = parrp_table_core_vec.zipWithIndex.map{case (data, idx) => 
     (data, idx.U)}.reduce { (a, b) =>
-    MuxT(a._1.lru > b._1.lru, a, b) //collapse vector down to way index of maximum adjusted lru value.  
+    MuxT(a._1.state < b._1.state, a, MuxT(b._1.state < a._1.state, b, MuxT(a._1.lru > b._1.lru, a, b))) //collapse vector down to way index of maximum adjusted lru value, prioritizing deallocated and invalid ways over allocated ones.
   }._2
 
   // val phy_vacant_way = MuxCase(params.cache.ways.U,
@@ -364,7 +364,7 @@ class Directory(params: InclusiveCacheParameters) extends Module
     printf(cf"@ clk_cycle ${clk_cycle}: Directory read: ${ren} set: 0x${io.read.bits.set}%x tag: 0x${io.read.bits.tag}%x /write: ${wen} set: 0x${write.bits.set}%x tag: 0x${write.bits.data.tag}%x state: 0x${write.bits.data.state}%x clients: 0x${write.bits.data.clients}\n")
   }
   when (io.write.valid) {
-    printf(cf"@ clk_cycle ${clk_cycle}: Queueing write! set: 0x${io.write.bits.set}%x tag: 0x${io.write.bits.data.tag}%x state: 0x${io.write.bits.data.state}%x clients: 0x${write.bits.data.clients}\n")
+    printf(cf"@ clk_cycle ${clk_cycle}: Queueing write! set: 0x${io.write.bits.set}%x tag: 0x${io.write.bits.data.tag}%x data: ${io.write.bits.data}\n")
   }
   when (ren1){
     printf(cf"@ clk_cycle ${clk_cycle}: ParRP read_core: ${read_core}, speculated victim: ${parrp_table_core_vec(parrp_speculated_victim_index)}, true victim: ${true_victim}, table: ${parrp_table_core_vec}\n")

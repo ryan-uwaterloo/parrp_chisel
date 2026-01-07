@@ -231,7 +231,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
 
   when (request.prio(2) && (!params.firstLevel).B) { // always a hit
     final_meta_writeback.dirty   := (meta.dirty && (request.opcode =/= 7.U)) || (request.opcode(0) && !request.opcode(1)) //we will be way cleaner now right? only ProbeAckData (0b101) sets us dirty, not ReleaseData (0b111)
-    final_meta_writeback.state   := Mux(request.param =/= TtoT && meta.state === TRUNK, TIP, meta.state)
+    final_meta_writeback.state   := Mux(((meta.clients & ~Mux(isToN(request.param), req_clientBit, 0.U)) === 0.U) && meta.state === TRUNK, TIP, meta.state) //only when final client transitions to N can we reclaim tip safely.
     final_meta_writeback.clients := meta.clients & ~Mux(isToN(request.param), req_clientBit, 0.U)
     final_meta_writeback.hit     := true.B // chained requests are hits
     final_meta_writeback.modified_cores := meta.modified_cores & ~req_clientBit //remove set bit from modified cores
@@ -293,7 +293,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   when(meta_valid && request.prio(2) && (request.opcode === 6.U || request.opcode === 7.U)) {// release
     //val new_parrp_data = meta.parrp_data_vec
     new_parrp_data(meta.parrp_way).state := ParrpStates.deallocated //deallocate state, leave the rest of the vec alone!
-    when(request.param < 3.U){final_meta_writeback.in_core := meta.in_core & ~UIntToOH(meta.core)} //remove core from phy owners vec if it is pruning (has no reason to prune to B (param = 0))
+    when((request.param < 3.U) || (request.param === 5.U)){final_meta_writeback.in_core := meta.in_core & ~UIntToOH(meta.core)} //remove core from phy owners vec if it is pruning (has no reason to prune to B (param = 0))
     when((!s_speculativerel && w_store) || (!s_release && w_rprobeackfirst)){ //extra when clause to print less >_>
       printf(cf"Releasing! in_core = ${final_meta_writeback.in_core}, updated_entry = ${new_parrp_data(meta.parrp_way)}\n") 
     }
@@ -324,7 +324,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     // }
     new_parrp_data(meta.parrp_way).lru := 0.U //set updated way lru to 0 as it is MRU
     //replace updated way with new data beyond lru if a miss or overwriting a replaced way
-    when(!meta.parrp_hit || (we_released_something && request.prio(0))){ //when we miss in partition, update partition. Don't care about phy eviction/hit status. Don't update on flush commands (prio(1))
+    when(!meta.parrp_hit || (we_released_something && request.prio(0)) || (meta.parrp_hit && request.prio(0))){ //when we miss in partition, update partition. Don't care about phy eviction/hit status. Don't update on flush commands (prio(1)). Ensure that state gets re-set in the event of a hit in L2 so it's allocated in core.
       we_released_something := we_released_something //latch until meta is no longer valid
       new_parrp_data(meta.parrp_way).state := Mux(noncoherent_request, ParrpStates.deallocated, ParrpStates.allocated) //set to deallocated for noncoherent, allocated state for coherent in partition
       new_parrp_data(meta.parrp_way).way_index := meta.way //set index to the phy way we are using (when replaced and not invalid, this way is released from L2 first, but no wb)
@@ -442,15 +442,15 @@ class MSHR(params: InclusiveCacheParameters) extends Module
 
   //speculative releases don't change permission states so they don't need an assertion array.
 
-  when ((!s_release && w_rprobeackfirst) && io.schedule.ready) {
+  when ((!s_release && w_rprobeackfirst) && io.schedule.ready) { //assert back-inv freedom.
     eviction(S_BRANCH,    b)      // MMIO read to read-only device
     eviction(S_BRANCH_C,  b && c) // you need children to become C
-    eviction(S_TIP,       true)   // MMIO read || clean release can lead to this state
-    eviction(S_TIP_C,     c)      // needs two clients || client + mmio || downgrading client
-    eviction(S_TIP_CD,    c)      // needs two clients || client + mmio || downgrading client
-    eviction(S_TIP_D,     true)   // MMIO write || dirty release lead here
-    eviction(S_TRUNK_C,   c)      // acquire for write
-    eviction(S_TRUNK_CD,  c)      // dirty release then reacquire
+    eviction(S_TIP,       true)   // MMIO read || clean release can lead to this state ||// ONLY EVICT THINGS YOU OWN, PARRP
+    eviction(S_TIP_C,     false)      // needs two clients || client + mmio || downgrading client
+    eviction(S_TIP_CD,    false)      // needs two clients || client + mmio || downgrading client
+    eviction(S_TIP_D,     false)   // MMIO write || dirty release lead here
+    eviction(S_TRUNK_C,   false)      // acquire for write
+    eviction(S_TRUNK_CD,  false)      // dirty release then reacquire
   }
 
   when ((!s_writeback && no_wait) && io.schedule.ready) {
@@ -529,9 +529,9 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     transition(S_TRUNK_CD, S_INVALID,  c && p)
     transition(S_TRUNK_CD, S_BRANCH,   c && p) // losing D only possible via probe
     transition(S_TRUNK_CD, S_BRANCH_C, c && p) // losing D only possible via probe
-    transition(S_TRUNK_CD, S_TIP,      c && p) // probed while MMIO read || outer probe.toT (optional)
+    transition(S_TRUNK_CD, S_TIP,      c) // probed while MMIO read || outer probe.toT (optional) || released by all holders & WT
     transition(S_TRUNK_CD, S_TIP_C,    false)  // we would go S_TRUNK_C instead
-    transition(S_TRUNK_CD, S_TIP_D,    c)      // dirty release
+    transition(S_TRUNK_CD, S_TIP_D,    c)      // dirty release -> only WT on last sharer release
     transition(S_TRUNK_CD, S_TIP_CD,   c)      // bounce shared
     transition(S_TRUNK_CD, S_TRUNK_C,  c && p) // probed while acquire
   }
@@ -660,18 +660,19 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     // For C channel requests (ie: Release[Data])
     when (new_request.prio(2) && (!params.firstLevel).B) {
       s_execute := false.B
+      s_writeback := false.B //we must always touch directory for LRU reasons, even if it is clean.
       // Do we need to go dirty?
-      when (new_request.opcode(0) && !new_meta.dirty) {
-        s_writeback := false.B
-      }
-      // Does our state change?
-      when (isToB(new_request.param) && new_meta.state === TRUNK) {
-        s_writeback := false.B
-      }
-      // Do our clients change?
-      when (isToN(new_request.param) && (new_meta.clients & new_clientBit) =/= 0.U) {
-        s_writeback := false.B
-      }
+      // when (new_request.opcode(0) && !new_meta.dirty) {
+      //   s_writeback := false.B
+      // }
+      // // Does our state change?
+      // when (isToB(new_request.param) && new_meta.state === TRUNK) {
+      //   s_writeback := false.B
+      // }
+      // // Do our clients change?
+      // when (isToN(new_request.param) && (new_meta.clients & new_clientBit) =/= 0.U) {
+      //   s_writeback := false.B
+      // }
       assert (new_meta.hit)
       when((new_request.opcode === 7.U && new_meta.state =/= TIP) || (new_request.opcode === 6.U && new_meta.state === INVALID && Cat(0.U, new_meta.modified_cores)(new_meta.core) && ((new_meta.modified_cores ^ new_clientBit) === 0.U)) ){ //need to speculatively writeback data from a ReleaseData for tighter WCL, leaves us in TIP state after release.
         // printf(cf"new_meta.state = ${new_meta.state} , meta.state = ${meta.state}, fmw.state = ${final_meta_writeback.state}\n")
@@ -717,7 +718,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
         w_grantlast := false.B
         w_grant := false.B
         s_grantack := false.B
-        s_writeback := false.B
+        // s_writeback := false.B
       }
       // Do we need a probe?
       when ((!params.firstLevel).B && (new_meta.hit &&
@@ -727,19 +728,19 @@ class MSHR(params: InclusiveCacheParameters) extends Module
         w_pprobeackfirst := false.B
         w_pprobeacklast := false.B
         w_pprobeack := false.B
-        s_writeback := false.B
+        // s_writeback := false.B
       }
       // Do we need a grantack?
       when (new_request.opcode === AcquireBlock || new_request.opcode === AcquirePerm) {
         w_grantack := false.B
-        s_writeback := false.B
+        // s_writeback := false.B
       }
       // Becomes dirty?
       when (!new_request.opcode(2) && new_meta.hit && !new_meta.dirty) {
-        s_writeback := false.B
+        // s_writeback := false.B
       }
       // perhaps every request should writeback to directory for parrp purposes... right?
-      s_writeback := false.B //schedule a writeback for any access, regardless of physical directory changing or not.
+      s_writeback := false.B //schedule a writeback for any access, regardless of physical cache changing or not for LRU & directory purposes.
     }
   }
 }

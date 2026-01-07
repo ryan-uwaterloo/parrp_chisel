@@ -185,21 +185,21 @@ class SinkC(params: InclusiveCacheParameters) extends Module
 
     when (c.valid && c.ready){
       when (c.bits.opcode === 0.U){
-      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: AccessAck, addr: 0x${c.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: AccessAck, addr: 0x${c.bits.address}%x, source: 0x${c.bits.source}%x\n")
     } .elsewhen (c.bits.opcode === 1.U){
-      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: AccessAckData, addr: 0x${c.bits.address}%x, data: 0x${c.bits.data}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: AccessAckData, addr: 0x${c.bits.address}%x, source: 0x${c.bits.source}%x, data: 0x${c.bits.data}%x\n")
     } .elsewhen (c.bits.opcode === 2.U){
-      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: HintAck, addr: 0x${c.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: HintAck, addr: 0x${c.bits.address}%x, source: 0x${c.bits.source}%x\n")
     } .elsewhen (c.bits.opcode === 3.U) {
-      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: BAD_REQ, addr: 0x${c.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: BAD_REQ, addr: 0x${c.bits.address}%x, source: 0x${c.bits.source}%x\n")
     } .elsewhen (c.bits.opcode === 4.U) {
-      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: ProbeAck, addr: 0x${c.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: ProbeAck, addr: 0x${c.bits.address}%x, source: 0x${c.bits.source}%x\n")
     } .elsewhen (c.bits.opcode === 5.U) {
-      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: ProbeAckData, addr: 0x${c.bits.address}%x, data: 0x${c.bits.data}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: ProbeAckData, addr: 0x${c.bits.address}%x, source: 0x${c.bits.source}%x, data: 0x${c.bits.data}%x\n")
     } .elsewhen (c.bits.opcode === 6.U) {
-      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: Release, addr: 0x${c.bits.address}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: Release, addr: 0x${c.bits.address}%x, source: 0x${c.bits.source}%x\n")
     } .elsewhen(c.bits.opcode === 7.U) {
-      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: ReleaseData, addr: 0x${c.bits.address}%x, data: 0x${c.bits.data}%x\n")
+      printf(cf"@ clk_cycle ${clk_cycle}: New Sink C Request! opcode: ReleaseData, addr: 0x${c.bits.address}%x, source: 0x${c.bits.source}%x, data: 0x${c.bits.data}%x\n")
     }
     }
 

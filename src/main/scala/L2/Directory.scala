@@ -274,12 +274,12 @@ class Directory(params: InclusiveCacheParameters) extends Module
 
   dontTouch(free_ways)
   val phy_vacant_way_random = PriorityEncoderOH(
-    rotateLeft(free_ways, victimLFSR) //circular shift victim state for random vacant replacement
+    rotateLeft(free_ways, Mux(victimLFSR >= params.cache.ways.U, 0.U, victimLFSR)) //circular shift victim state for random vacant replacement (early rounding to prevent things from breaking with non-pow2 num ways)
   )  
-  val phy_vacant_way = Cat(rotateRight(VecInit(phy_vacant_way_random), victimLFSR).reverse)//undo shift to give us our final victim
+  val phy_vacant_way = Cat(rotateRight(VecInit(phy_vacant_way_random), Mux(victimLFSR >= params.cache.ways.U, 0.U, victimLFSR)).reverse)//undo shift to give us our final victim
   dontTouch(phy_vacant_way)
 
-  val true_victim = Mux(phy_vacant_way =/= 0.U, OHToUInt(phy_vacant_way), parrp_table_core_vec(parrp_speculated_victim_index).way_index)// get lowest index unowned way (cheapest), could consider random too.
+  val true_victim = Mux(phy_vacant_way =/= 0.U, OHToUInt(phy_vacant_way), parrp_table_core_vec(parrp_speculated_victim_index).way_index)// get random unowned way
 
   //if no unowned, take parrp victim as true victim. should be max parallelism.
   //need to examing more what "unowned" means... this doesn't mean it has no clients, because L2 owns data not in L1 (no clients)

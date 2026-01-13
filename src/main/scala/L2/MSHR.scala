@@ -230,7 +230,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   val req_promoteT = req_acquire && Mux(meta.hit, meta_no_clients && meta.state === TIP, gotT)
 
   when (request.prio(2) && (!params.firstLevel).B) { // always a hit
-    final_meta_writeback.dirty   := (meta.dirty && (request.opcode =/= 7.U)) || (request.opcode(0) && !request.opcode(1)) //we will be way cleaner now right? only ProbeAckData (0b101) sets us dirty, not ReleaseData (0b111)
+    final_meta_writeback.dirty   := (meta.dirty && (request.opcode =/= 7.U) && !(request.opcode === 6.U && ((meta.modified_cores ^ req_clientBit) === 0.U))) || (request.opcode(0) && !request.opcode(1)) //we will be way cleaner now right? only ProbeAckData (0b101) sets us dirty, not ReleaseData (0b111)
     final_meta_writeback.state   := Mux(((meta.clients & ~Mux(isToN(request.param), req_clientBit, 0.U)) === 0.U) && meta.state === TRUNK, TIP, meta.state) //only when final client transitions to N can we reclaim tip safely.
     final_meta_writeback.clients := meta.clients & ~Mux(isToN(request.param), req_clientBit, 0.U)
     final_meta_writeback.hit     := true.B // chained requests are hits
@@ -298,7 +298,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
       printf(cf"Releasing! in_core = ${final_meta_writeback.in_core}, updated_entry = ${new_parrp_data(meta.parrp_way)}\n") 
     }
 
-    when((request.opcode === 7.U && meta.state =/= TIP) || (request.opcode === 6.U && meta.state === INVALID && Cat(0.U, meta.modified_cores)(meta.core))) { //this is the conditions under which we update LRU (as they represent a store)
+    when((request.opcode === 7.U && meta.state =/= TIP) || (request.opcode === 6.U && meta.state === INVALID && (meta.modified_cores & req_clientBit).orR)) { //this is the conditions under which we update LRU (as they represent a store)
       meta.parrp_data_vec.zipWithIndex.map { case(d, i) =>
         new_parrp_data(i).lru := Mux(d.lru < meta.parrp_data_vec(meta.parrp_way).lru, d.lru + 1.U, d.lru) //parrp way contains stored way
       }
@@ -511,9 +511,9 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     transition(S_TIP_CD,   S_INVALID,  c && p)
     transition(S_TIP_CD,   S_BRANCH,   c && p) // losing D is only possible via probe
     transition(S_TIP_CD,   S_BRANCH_C, c && p) // losing D is only possible via probe
-    transition(S_TIP_CD,   S_TIP,      c && p) // probed while MMIO read || outer probe.toT (optional)
-    transition(S_TIP_CD,   S_TIP_C,    false)  // we would go S_TRUNK_C instead
-    transition(S_TIP_CD,   S_TIP_D,    c)      // MMIO write || clean release (optional)
+    transition(S_TIP_CD,   S_TIP,      c) // last modifier releases while no read-only copies exist, we perform writethrough.
+    transition(S_TIP_CD,   S_TIP_C,    c)  // last modifier releases while read-only copies exist, we perform writethrough but the read-only copies persist.
+    transition(S_TIP_CD,   S_TIP_D,    false)      // if we have no more clients, a writethrough should've happened, transitiontiung to S_TIP
     transition(S_TIP_CD,   S_TRUNK_C,  c && p) // probed while acquire
     transition(S_TIP_CD,   S_TRUNK_CD, c)      // acquire
 
@@ -674,7 +674,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
       //   s_writeback := false.B
       // }
       assert (new_meta.hit)
-      when((new_request.opcode === 7.U && new_meta.state =/= TIP) || (new_request.opcode === 6.U && new_meta.state === INVALID && Cat(0.U, new_meta.modified_cores)(new_meta.core) && ((new_meta.modified_cores ^ new_clientBit) === 0.U)) ){ //need to speculatively writeback data from a ReleaseData for tighter WCL, leaves us in TIP state after release.
+      when((new_request.opcode === 7.U && new_meta.state =/= TIP) || (new_request.opcode === 6.U && ((new_meta.modified_cores ^ new_clientBit) === 0.U)) ){ //need to speculatively writeback data from a ReleaseData for tighter WCL, leaves us in TIP state after release. Also release when the last modifier to a cache line releases, leaving us in TIP_C state
         // printf(cf"new_meta.state = ${new_meta.state} , meta.state = ${meta.state}, fmw.state = ${final_meta_writeback.state}\n")
         s_speculativerel := false.B
         w_releaseack := false.B

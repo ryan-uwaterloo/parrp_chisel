@@ -35,7 +35,7 @@ class DirectoryEntry(params: InclusiveCacheParameters) extends InclusiveCacheBun
   val clients = UInt(params.clientBits.W)
   val tag     = UInt(params.tagBits.W)
   val in_core = UInt(params.coreIndexMap.size.W) //teehee I might make a coreBits later
-  val modified_cores = UInt(params.coreIndexMap.size.W)
+  val modified_cores = UInt(params.clientBits.W) //probe/client bits are 8b and there's no easy way to reduce this to a single owner per partition :(
 }
 
 class DirectoryWrite(params: InclusiveCacheParameters) extends InclusiveCacheBundle(params)

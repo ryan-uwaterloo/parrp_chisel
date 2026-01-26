@@ -55,6 +55,19 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   io.in.d <> sourceD.io.d
   io.resp <> sourceX.io.x
 
+  //hardcode the memory delay as the SRAM model we use to verify does not have it built in :)
+  //however, clean releases need to travel ASAP, so only delay ReleaseData messages!
+  //the SRAM model has 4 cycles built in so that works
+  require(params.micro.memCycles > 4)
+  val c_is_relData  =  sourceC.io.c.valid && sourceC.io.c.bits.opcode === 7.U
+  val c_shreg_valid = ShiftRegister(c_is_relData, params.micro.memCycles-4, io.out.c.ready)
+  val c_shreg       = ShiftRegister(sourceC.io.c.bits, params.micro.memCycles-4,io.out.c.ready)
+  io.out.c.valid    := Mux(c_shreg_valid, c_shreg_valid, sourceC.io.c.valid && sourceC.io.c.bits.opcode =/= 7.U)
+  io.out.c.bits     := Mux(c_shreg_valid, c_shreg, sourceC.io.c.bits)
+  //a channel has no funky switching behaviours though
+  io.out.a.valid := ShiftRegister(sourceA.io.a.valid, params.micro.memCycles-4, io.out.a.ready)
+  io.out.a.bits  := ShiftRegister(sourceA.io.a.bits, params.micro.memCycles-4, io.out.a.ready)
+
   val sinkA = Module(new SinkA(params))
   val sinkC = Module(new SinkC(params))
   val sinkD = Module(new SinkD(params))
@@ -149,7 +162,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
     MuxT(a._1 > b._1, a, b) //collapse mshr vector to get oldest req, oldest req has largest age.
   }._2
   val mshr_select = oldest_mshr
-  val mshr_selectOH = UIntToOH(oldest_mshr, params.mshrs) & Cat(mshrs.map(_.io.schedule.valid).reverse) //fix width so prio stacks work right. Allow for no mshr to be selected.
+  val mshr_selectOH = UIntToOH(oldest_mshr, params.mshrs) & mshr_request //Cat(mshrs.map(_.io.schedule.valid).reverse) //fix width so prio stacks work right. Allow for no mshr to be selected. (account for when the request isn't allowed to proceed u dunderhead xd)
   val schedule = Mux1H(mshr_selectOH, mshrs.map(_.io.schedule.bits))
   val scheduleTag = Mux1H(mshr_selectOH, mshrs.map(_.io.status.bits.tag))
   val scheduleSet = Mux1H(mshr_selectOH, mshrs.map(_.io.status.bits.set))
@@ -281,7 +294,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   val c_mshr_free = (~mshr_validOH).orR
 
   // Pick highest priority request
-  request.valid := directory.io.ready && (sinkA.io.req.valid || sinkX.io.req.valid || sinkC.io.req.valid)
+  request.valid := directory.io.ready && (sinkA.io.req.valid || sinkX.io.req.valid || sinkC.io.req.valid || c_rpq_out.valid)
   request.bits := Mux(c_rpq_out.valid && c_mshr_free, c_rpq_out.bits, //c_rpq > c > x > a
                     Mux(sinkC.io.req.valid, sinkC.io.req.bits,
                       Mux(sinkX.io.req.valid, sinkX.io.req.bits, 
@@ -334,7 +347,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
     }.elsewhen (sinkX.io.req.valid === 1.U) {
         printf(cf"@ clk_cycle ${clk_cycle}: Req from X passed to MSHR ${mshr_select} due to hit on set ${request.bits.set}\n")
     }
-  }.elsewhen (alloc & request.valid) {
+  }.elsewhen (alloc & request.valid && !mshr_uses_directory_assuming_no_bypass) {
       printf(cf"@ clk_cycle ${clk_cycle}: Allocating MSHR ${OHToUInt(mshr_insertOH)} For Request!\n")
   }.elsewhen (queue & request.valid) {
       printf(cf"@ clk_cycle ${clk_cycle}: Queuing to MSHR ${OHToUInt(lowerMatches1)} For Request!\n")

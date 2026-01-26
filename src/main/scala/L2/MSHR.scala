@@ -201,6 +201,10 @@ class MSHR(params: InclusiveCacheParameters) extends Module
                        io.schedule.bits.d.valid || io.schedule.bits.e.valid || io.schedule.bits.x.valid ||
                        io.schedule.bits.dir.valid
 
+  // clock cycle counter
+  val clk_cycle = RegInit(0.U(32.W))
+  clk_cycle := clk_cycle + 1.U
+
   // Schedule completions
   when (io.schedule.ready) {
                                     s_rprobe     := true.B
@@ -217,6 +221,15 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     when (no_wait) {
       request_valid := false.B
       meta_valid := false.B
+      when(request.prio(0) && request.opcode === AcquireBlock){
+        printf(cf"@ clk_cycle ${clk_cycle}: AcquireBlock Request completed; sent to directory! source: 0x${request.source}%x\n")
+      }.elsewhen(request.prio(2) && request.opcode === ReleaseData){
+        printf(cf"@ clk_cycle ${clk_cycle}: ReleaseData Request completed; sent to directory! source: 0x${request.source}%x\n")
+      }.elsewhen(request.prio(2) && request.opcode === Release){
+        printf(cf"@ clk_cycle ${clk_cycle}: Release Request completed; sent to directory! source: 0x${request.source}%x \n")
+      }.otherwise{
+        printf(cf"@ clk_cycle ${clk_cycle}: Other Request completed; sent to directory! source: 0x${request.source}%x\n")
+      }
     }
   }
 
@@ -633,6 +646,8 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     probes_noT := false.B
     gotT := false.B
     bad_grant := false.B
+
+    printf(cf"@ clk_cycle ${clk_cycle}: Req in MSHR; need dram?: ${!new_meta.hit || (new_meta.state === BRANCH && new_needT)}, need probe? ${(new_meta.hit && (new_needT || new_meta.state === TRUNK) &&(new_meta.clients & ~new_skipProbe) =/= 0.U)}, evicting? ${!new_meta.hit && new_meta.state =/= INVALID}, back-inv? ${!new_meta.hit && new_meta.state =/= INVALID && (new_meta.clients =/= 0.U)}, source: 0x${new_request.source}%x\n")
 
     // These should already be either true or turning true
     // We clear them here explicitly to simplify the mux tree

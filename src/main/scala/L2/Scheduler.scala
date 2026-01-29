@@ -64,6 +64,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   val c_shreg       = ShiftRegister(sourceC.io.c.bits, params.micro.memCycles-4,io.out.c.ready)
   io.out.c.valid    := Mux(c_shreg_valid, c_shreg_valid, sourceC.io.c.valid && sourceC.io.c.bits.opcode =/= 7.U)
   io.out.c.bits     := Mux(c_shreg_valid, c_shreg, sourceC.io.c.bits)
+  sourceC.io.c.ready := io.out.c.ready && !(sourceC.io.c.valid && sourceC.io.c.bits.opcode =/= 7.U && c_shreg_valid)
   //a channel has no funky switching behaviours though
   io.out.a.valid := ShiftRegister(sourceA.io.a.valid, params.micro.memCycles-4, io.out.a.ready)
   io.out.a.bits  := ShiftRegister(sourceA.io.a.bits, params.micro.memCycles-4, io.out.a.ready)

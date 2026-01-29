@@ -190,7 +190,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   val no_wait = w_rprobeacklast && w_releaseack && w_grantlast && w_pprobeacklast && (w_grantack) && s_flush && s_execute //allow bypassing of waiting on grantack to make requests 1 cycle shorter, nvm this crashes the peekpoke tester LMAO
   io.schedule.bits.a.valid := !s_acquire && s_release && s_pprobe
   io.schedule.bits.b.valid := !s_rprobe || !s_pprobe
-  io.schedule.bits.c.valid := (!s_release && w_rprobeackfirst) || (!s_probeack && w_pprobeackfirst) || (!s_speculativerel && w_store)
+  io.schedule.bits.c.valid := (!s_release && w_rprobeackfirst) || (!s_probeack && w_pprobeackfirst) || (!s_speculativerel && (w_store || (request.opcode === 6.U)))
   io.schedule.bits.d.valid := !s_execute && w_pprobeack && w_grant
   io.schedule.bits.e.valid := !s_grantack && w_grantfirst && s_execute //depend on srcd issue to serialize :)
   io.schedule.bits.x.valid := !s_flush && w_releaseack
@@ -307,7 +307,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     //val new_parrp_data = meta.parrp_data_vec
     new_parrp_data(meta.parrp_way).state := ParrpStates.deallocated //deallocate state, leave the rest of the vec alone!
     when((request.param < 3.U) || (request.param === 5.U)){final_meta_writeback.in_core := meta.in_core & ~UIntToOH(meta.core)} //remove core from phy owners vec if it is pruning (has no reason to prune to B (param = 0))
-    when((!s_speculativerel && w_store) || (!s_release && w_rprobeackfirst)){ //extra when clause to print less >_>
+    when((!s_speculativerel && (w_store || (request.opcode === 6.U)))){ //extra when clause to print less >_>
       printf(cf"Releasing! in_core = ${final_meta_writeback.in_core}, updated_entry = ${new_parrp_data(meta.parrp_way)}\n") 
     }
 

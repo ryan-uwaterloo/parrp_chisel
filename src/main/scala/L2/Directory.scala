@@ -206,7 +206,7 @@ class Directory(params: InclusiveCacheParameters) extends Module
   val not_a_core = params.coreIndexMap.size.U //0 index means that size is out of range
   val core = MuxCase( not_a_core, //default is an out of range core so we can ignore non-core requests.
     params.sourceIdRanges.map { case (range, core) => //get our core index from 
-      (sourceId >= range.start.U && sourceId <= range.end.U, core) //mapping to tuples should work fine
+      (sourceId >= range.start.U && sourceId < range.end.U, core) //mapping to tuples should work fine
     }
   )
 

@@ -273,7 +273,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
     val will_reload = m.io.schedule.bits.reload && (may_pop || bypass)
     m.io.allocate.bits.viewAsSupertype(chiselTypeOf(requests.io.data)) := Mux(bypass, WireInit(new QueuedRequest(params), init = request.bits), requests.io.data)
     m.io.allocate.bits.set := m.io.status.bits.set
-    m.io.allocate.bits.repeat := m.io.allocate.bits.tag === m.io.status.bits.tag
+    m.io.allocate.bits.repeat := false.B //m.io.allocate.bits.tag === m.io.status.bits.tag disable repeats, see comment below
     m.io.allocate.valid := sel && will_reload
   }
 
@@ -284,10 +284,11 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   requests.io.pop.bits  := pop_index
 
   // Reload from the Directory if the next MSHR operation changes tags
-  val lb_tag_mismatch = scheduleTag =/= requests.io.data.tag
-  val mshr_uses_directory_assuming_no_bypass = schedule.reload && may_pop && lb_tag_mismatch
-  val mshr_uses_directory_for_lb = will_pop && lb_tag_mismatch
-  val mshr_uses_directory = will_reload && scheduleTag =/= Mux(bypass, request.bits.tag, requests.io.data.tag)
+  // val lb_tag_mismatch = scheduleTag =/= requests.io.data.tag
+  // disable repeats as the only case in which we have to service back-to-back requests to the same cache line, we will be from different cores.
+  val mshr_uses_directory_assuming_no_bypass = schedule.reload && may_pop// && lb_tag_mismatch
+  val mshr_uses_directory_for_lb = will_pop// && lb_tag_mismatch
+  val mshr_uses_directory = will_reload// && scheduleTag =/= Mux(bypass, request.bits.tag, requests.io.data.tag)
 
   // Is there an MSHR free for this request?
   val mshr_validOH = Cat(mshrs.map(_.io.status.valid).reverse)

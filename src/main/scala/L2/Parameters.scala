@@ -197,6 +197,22 @@ case class InclusiveCacheParameters(
   val innerMaskBits = inner.manager.beatBytes / micro.writeBytes
   val outerMaskBits = outer.manager.beatBytes / micro.writeBytes
 
+  def clientBit(source: UInt): UInt = {
+    if (clientBitsRaw == 0) {
+      0.U
+    } else {
+      Cat(inner.client.clients.filter(_.supports.probe).map(_.sourceId.contains(source)).reverse)
+    }
+  }
+
+  def clientSource(bit: UInt): UInt = {
+    if (clientBitsRaw == 0) {
+      0.U
+    } else {
+      Mux1H(bit, inner.client.clients.filter(_.supports.probe).map(c => c.sourceId.start.U))
+    }
+  }
+
   //=================== ParRP PARAMS=================//
   //val groupedByCore = inner.client.clients.filter(_.supports.probe).groupBy { client => //group clients that can probe by core (and everything else, 
   val groupedByCore = inner.client.clients.groupBy { client => //ICache isn't flagged as supporting probe (I'm DEAD)
@@ -228,22 +244,6 @@ case class InclusiveCacheParameters(
   val ageBits = log2Ceil(mshrs*mshrs*mshrs*mshrs*3)+1 //some age bound
 
   //==================== END ParRP PARAMS =============================//
-
-  def clientBit(source: UInt): UInt = {
-    if (clientBitsRaw == 0) {
-      0.U
-    } else {
-      Cat(inner.client.clients.filter(_.supports.probe).map(_.sourceId.contains(source)).reverse)
-    }
-  }
-
-  def clientSource(bit: UInt): UInt = {
-    if (clientBitsRaw == 0) {
-      0.U
-    } else {
-      Mux1H(bit, inner.client.clients.filter(_.supports.probe).map(c => c.sourceId.start.U))
-    }
-  }
 
   def parseAddress(x: UInt): (UInt, UInt, UInt) = {
     val offset = Cat(addressMapping.map(o => x(o,o)).reverse)

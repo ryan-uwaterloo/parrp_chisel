@@ -190,7 +190,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   val no_wait = w_rprobeacklast && w_releaseack && w_grantlast && w_pprobeacklast && (w_grantack) && s_flush && s_execute //allow bypassing of waiting on grantack to make requests 1 cycle shorter, nvm this crashes the peekpoke tester LMAO
   io.schedule.bits.a.valid := !s_acquire && s_release && s_pprobe
   io.schedule.bits.b.valid := !s_rprobe || !s_pprobe
-  io.schedule.bits.c.valid := (!s_release && w_rprobeackfirst) || (!s_probeack && w_pprobeackfirst) || (!s_speculativerel && (w_store || (request.opcode === 6.U)))
+  io.schedule.bits.c.valid := (!s_release && w_rprobeackfirst) || (!s_probeack && w_pprobeackfirst) || (!s_speculativerel && w_store && s_execute)
   io.schedule.bits.d.valid := !s_execute && w_pprobeack && w_grant
   io.schedule.bits.e.valid := !s_grantack && w_grantfirst && s_execute //depend on srcd issue to serialize :)
   io.schedule.bits.x.valid := !s_flush && w_releaseack
@@ -207,16 +207,16 @@ class MSHR(params: InclusiveCacheParameters) extends Module
 
   // Schedule completions
   when (io.schedule.ready) {
-                                    s_rprobe     := true.B
-    when (w_rprobeackfirst)       { s_release    := true.B }
-                                    s_pprobe     := true.B
-    when (s_release && s_pprobe)  { s_acquire    := true.B }
-    when (w_releaseack)           { s_flush      := true.B }
-    when (w_pprobeackfirst)       { s_probeack   := true.B }
+                                      s_rprobe     := true.B
+    when (w_rprobeackfirst)         { s_release    := true.B }
+                                      s_pprobe     := true.B
+    when (s_release && s_pprobe)    { s_acquire    := true.B }
+    when (w_releaseack)             { s_flush      := true.B }
+    when (w_pprobeackfirst)         { s_probeack   := true.B }
     when (w_grantfirst && s_execute){ s_grantack   := true.B }
-    when (w_pprobeack && w_grant) { s_execute    := true.B } //sorry to your nice formatting :(
-    when (w_store)                { s_speculativerel := true.B}
-    when (no_wait)                { s_writeback  := true.B }
+    when (w_pprobeack && w_grant)   { s_execute    := true.B }
+    when (w_store && s_execute)     { s_speculativerel := true.B}
+    when (no_wait)                  { s_writeback  := true.B }
     // Await the next operation
     when (no_wait) {
       request_valid := false.B
@@ -298,6 +298,36 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     // update lrus in clk2?
   //cases and stuff:
     // if we demote something due to an explicit release -> change state to not in core, | if it is a releaseData or was previously dirty, update LRU. Else, leave info unchanged.
+  
+  val clientBitRanges: Seq[(Int, UInt)] = params.sourceIdRanges.map {case (range, core) => 
+    (core.litValue.toInt, params.clientBit(range.start.U))
+  }.toSeq
+
+  // println(s"clientBitRanges: ${clientBitRanges}")
+
+  val groupedByCoreIndex: Map[Int, Seq[UInt]] =
+    clientBitRanges.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+
+  // println(s"groupedByCoreIndex: ${groupedByCoreIndex}")
+
+  val coreMaskMap: Map[Int, UInt] = groupedByCoreIndex.map { case (core, masks) =>
+    val coreIdx = core
+    // println(s"core = ${coreIdx}")
+    coreIdx -> masks.reduce(_ | _)
+  }
+
+  // println(s"coreMaskMap: ${coreMaskMap}")
+
+  val coreMaskSeq: Seq[UInt] = (0 until params.coreIndexMap.size).map { idx =>
+    coreMaskMap(idx)
+  }
+
+  val coreClientMask = VecInit(coreMaskSeq)
+
+  def muxIfLastClientInCore[T <: Data](yes: T, no: T) = { //helper function which has the condition of being the only client in a partition with ownership of cache line
+    val out = Mux((~req_clientBit & (coreClientMask(meta.core) & (meta.clients | meta.modified_cores))) === 0.U, yes, no)
+    out
+  }
   val new_parrp_data = Wire(Vec(params.partitionSize, new ParrpEntry(params)))
   val we_released_something = Reg(Bool()) //surely a flag is disgusting enough to work LOL
   val noncoherent_request = request.prio(0) && (request.opcode === 0.U || request.opcode === 1.U || request.opcode === 4.U || request.opcode === 5.U)//a put or a get (or an intent) on A channel are non-coherent requests
@@ -305,9 +335,10 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   new_parrp_data := meta.parrp_data_vec
   when(meta_valid && request.prio(2) && (request.opcode === 6.U || request.opcode === 7.U)) {// release
     //val new_parrp_data = meta.parrp_data_vec
-    new_parrp_data(meta.parrp_way).state := ParrpStates.deallocated //deallocate state, leave the rest of the vec alone!
-    when((request.param < 3.U) || (request.param === 5.U)){final_meta_writeback.in_core := meta.in_core & ~UIntToOH(meta.core)} //remove core from phy owners vec if it is pruning (has no reason to prune to B (param = 0))
-    when((!s_speculativerel && (w_store || (request.opcode === 6.U)))){ //extra when clause to print less >_>
+    assert((req_clientBit & coreClientMask(meta.core)) =/= 0.U, cf"coreClientMask mapping is wrong; ${coreClientMask(meta.core)} fetched for core ${meta.core}, req bit = ${req_clientBit}")
+    new_parrp_data(meta.parrp_way).state := muxIfLastClientInCore(ParrpStates.deallocated, meta.parrp_data_vec(meta.parrp_way).state) //deallocate state, leave the rest of the vec alone! (if last owner in partition)
+    when((request.param < 3.U) || (request.param === 5.U)){final_meta_writeback.in_core := muxIfLastClientInCore(meta.in_core & ~UIntToOH(meta.core), meta.in_core)} //remove core from phy owners vec if it is pruning (has no reason to prune to B (param = 0))
+    when((!s_speculativerel && w_store && s_execute)){ //extra when clause to print less >_>
       printf(cf"Releasing! in_core = ${final_meta_writeback.in_core}, updated_entry = ${new_parrp_data(meta.parrp_way)}\n") 
     }
 
@@ -405,7 +436,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   // Coverage of state transitions
   def cacheState(entry: DirectoryEntry, hit: Bool) = {
     val out = WireDefault(0.U)
-    val c = entry.clients.orR
+    val c = (entry.clients.orR || entry.in_core.orR)
     val d = entry.dirty
     switch (entry.state) {
       is (BRANCH)  { out := Mux(c, S_BRANCH_C.code, S_BRANCH.code) }
@@ -543,10 +574,10 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     transition(S_TRUNK_CD, S_BRANCH,   c && p) // losing D only possible via probe
     transition(S_TRUNK_CD, S_BRANCH_C, c && p) // losing D only possible via probe
     transition(S_TRUNK_CD, S_TIP,      c) // probed while MMIO read || outer probe.toT (optional) || released by all holders & WT
-    transition(S_TRUNK_CD, S_TIP_C,    false)  // we would go S_TRUNK_C instead
+    transition(S_TRUNK_CD, S_TIP_C,    c)  // we would go S_TRUNK_C unless a stale copy exists and is holding cached status.
     transition(S_TRUNK_CD, S_TIP_D,    c)      // dirty release -> only WT on last sharer release
     transition(S_TRUNK_CD, S_TIP_CD,   c)      // bounce shared
-    transition(S_TRUNK_CD, S_TRUNK_C,  c && p) // probed while acquire
+    transition(S_TRUNK_CD, S_TRUNK_C,  c) // c0 acq TT -> c1 acq B (c0 PaD) [LLC in T_CD] -> c0 Stale Rel, perform WT [LLC T_CD -> T_C]
   }
 
   // Handle response messages
@@ -689,11 +720,14 @@ class MSHR(params: InclusiveCacheParameters) extends Module
       //   s_writeback := false.B
       // }
       assert (new_meta.hit)
-      when((new_request.opcode === 7.U && new_meta.state =/= TIP) || (new_request.opcode === 6.U && ((new_meta.modified_cores ^ new_clientBit) === 0.U)) ){ //need to speculatively writeback data from a ReleaseData for tighter WCL, leaves us in TIP state after release. Also release when the last modifier to a cache line releases, leaving us in TIP_C state
+      when((new_request.opcode === 7.U && new_meta.state =/= TIP)){ //need to speculatively writeback data from a ReleaseData for tighter WCL, leaves us in TIP state after release. Also release when the last modifier to a cache line releases, leaving us in TIP_C state
         // printf(cf"new_meta.state = ${new_meta.state} , meta.state = ${meta.state}, fmw.state = ${final_meta_writeback.state}\n")
         s_speculativerel := false.B
         w_releaseack := false.B
         w_store := false.B
+      }.elsewhen((new_request.opcode === 6.U && ((new_meta.modified_cores ^ new_clientBit) === 0.U))){
+        s_speculativerel := false.B
+        w_releaseack := false.B
       }
     }
     // For X channel requests (ie: flush)

@@ -334,19 +334,19 @@ class Directory(params: InclusiveCacheParameters) extends Module
   io.result.valid := ren2//there is NO reg between read and output, would probably need one if LRU logic depends on hit... maybe always compute replacement?
   io.result.bits.viewAsSupertype(chiselTypeOf(bypass.data)) := Mux(hit, Mux1H(hits, ways), Mux(setQuash && (tagMatch || wayMatch), bypass.data, Mux1H(UIntToOH(true_victim), ways)))
   io.result.bits.hit := hit || (setQuash && tagMatch && bypass.data.state =/= INVALID)
-  val way_final = Mux(hit, OHToUInt(hits), Mux(setQuash && tagMatch, bypass.way, true_victim))
+  val way_final = Mux(hit, OHToUInt(hits), Mux(setQuash && tagMatch, bypass.way, true_victim)) //I believe this inner mux here is redundant.
   dontTouch(way_final)
 
   //consider moving this, so we can get its value too, consider 1st cycle. consult profs for IO/logic tradeoff...
   val parrp_hit: Bool = (parrp_table_core_vec.map { case entry => 
-    (entry.way_index === way_final) && (entry.state =/= ParrpStates.invalid) && (!setQuash || entry.way_index =/= bypass.way)
+    (entry.way_index === way_final) && (entry.state =/= ParrpStates.invalid) //&& (!setQuash || entry.way_index =/= bypass.way)
   }.reduce(_ || _)) //is our target way in our parrp partition? indep of phy cache.
 
   io.result.bits.parrp_hit := parrp_hit
 
 
   val parrp_index = Mux(parrp_hit, OHToUInt(Cat(parrp_table_core_vec.map{ entry =>
-    (entry.way_index === way_final) && (entry.state =/= INVALID) && (!setQuash || entry.way_index =/= bypass.way)
+    (entry.way_index === way_final) && (entry.state =/= INVALID) //&& (!setQuash || entry.way_index =/= bypass.way)
   }.reverse)), parrp_speculated_victim_index) //cursed tagmatch to get the way to pass to the mshr
   io.result.bits.way := way_final
   io.result.bits.parrp_way := parrp_index //if hit, index of hit. if miss, index of evicted parrp line

@@ -32,10 +32,10 @@ class DirectoryEntry(params: InclusiveCacheParameters) extends InclusiveCacheBun
 {
   val dirty   = Bool() // true => TRUNK or TIP
   val state   = UInt(params.stateBits.W)
-  val clients = UInt(params.clientBits.W)
+  val clients = UInt(params.clientBits.W) //non-stale copies
   val tag     = UInt(params.tagBits.W)
-  val in_core = UInt(params.coreIndexMap.size.W) //teehee I might make a coreBits later
-  val modified_cores = UInt(params.clientBits.W) //probe/client bits are 8b and there's no easy way to reduce this to a single owner per partition :(
+  val in_core = UInt(params.clientBits.W) //stale + non-stale copies - this must be clients wide and not cores/partitions wide - consider the effects of a stale read-only copy...
+  val modified_cores = UInt(params.clientBits.W) //stale copies that held write perms - probe/client bits are 8b and there's no easy way to reduce this to a single owner per partition :(
 }
 
 class DirectoryWrite(params: InclusiveCacheParameters) extends InclusiveCacheBundle(params)

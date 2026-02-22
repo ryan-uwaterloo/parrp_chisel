@@ -325,7 +325,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   val coreClientMask = VecInit(coreMaskSeq)
 
   def muxIfLastClientInCore[T <: Data](yes: T, no: T) = { //helper function which has the condition of being the only client in a partition with ownership of cache line
-    val out = Mux((~req_clientBit & (coreClientMask(meta.core) & (meta.clients | meta.modified_cores))) === 0.U, yes, no)
+    val out = Mux((~req_clientBit & (coreClientMask(meta.core) & (meta.clients | meta.in_core))) === 0.U, yes, no)
     out
   }
   val new_parrp_data = Wire(Vec(params.partitionSize, new ParrpEntry(params)))
@@ -333,11 +333,14 @@ class MSHR(params: InclusiveCacheParameters) extends Module
   val noncoherent_request = request.prio(0) && (request.opcode === 0.U || request.opcode === 1.U || request.opcode === 4.U || request.opcode === 5.U)//a put or a get (or an intent) on A channel are non-coherent requests
   we_released_something := false.B
   new_parrp_data := meta.parrp_data_vec
+  when(meta_valid && request.prio(0)) { //on any acquire, be sure to add to phy owner vector - just adding on a miss is not enough to properly record presence in multiple clients per partition.
+    final_meta_writeback.in_core := Mux(noncoherent_request, meta.in_core, meta.in_core | req_clientBit) //add core to phy owners vec if coherent request
+  }
   when(meta_valid && request.prio(2) && (request.opcode === 6.U || request.opcode === 7.U)) {// release
     //val new_parrp_data = meta.parrp_data_vec
     assert((req_clientBit & coreClientMask(meta.core)) =/= 0.U, cf"coreClientMask mapping is wrong; ${coreClientMask(meta.core)} fetched for core ${meta.core}, req bit = ${req_clientBit}")
     new_parrp_data(meta.parrp_way).state := muxIfLastClientInCore(ParrpStates.deallocated, meta.parrp_data_vec(meta.parrp_way).state) //deallocate state, leave the rest of the vec alone! (if last owner in partition)
-    when((request.param < 3.U) || (request.param === 5.U)){final_meta_writeback.in_core := muxIfLastClientInCore(meta.in_core & ~UIntToOH(meta.core), meta.in_core)} //remove core from phy owners vec if it is pruning (has no reason to prune to B (param = 0))
+    when((request.param < 3.U) || (request.param === 5.U)){final_meta_writeback.in_core := meta.in_core & ~req_clientBit} //remove core from phy owners vec if it is pruning (has no reason to prune to B (param = 0))
     when((!s_speculativerel && w_store && s_execute)){ //extra when clause to print less >_>
       printf(cf"Releasing! in_core = ${final_meta_writeback.in_core}, updated_entry = ${new_parrp_data(meta.parrp_way)}\n") 
     }
@@ -372,9 +375,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
       we_released_something := we_released_something //latch until meta is no longer valid
       new_parrp_data(meta.parrp_way).state := Mux(noncoherent_request, ParrpStates.deallocated, ParrpStates.allocated) //set to deallocated for noncoherent, allocated state for coherent in partition
       new_parrp_data(meta.parrp_way).way_index := meta.way //set index to the phy way we are using (when replaced and not invalid, this way is released from L2 first, but no wb)
-    }
-    final_meta_writeback.in_core := Mux(noncoherent_request, meta.in_core, meta.in_core | UIntToOH(meta.core)) //add core to phy owners vec if coherent request
-  
+    }  
   }
   final_meta_writeback.parrp_data_vec := new_parrp_data //so this will properly replay in mshr
   //printf(cf"are you crazy? fmw_in_core: ${final_meta_writeback.in_core} meta_core: ${meta.core} \n")
@@ -720,6 +721,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
       //   s_writeback := false.B
       // }
       assert (new_meta.hit)
+      assert ((new_meta.in_core & new_clientBit).orR, cf"This line is not in its partition, can't release it! in_core = ${new_meta.in_core} clienBit = ${new_clientBit}")
       when((new_request.opcode === 7.U && new_meta.state =/= TIP)){ //need to speculatively writeback data from a ReleaseData for tighter WCL, leaves us in TIP state after release. Also release when the last modifier to a cache line releases, leaving us in TIP_C state
         // printf(cf"new_meta.state = ${new_meta.state} , meta.state = ${meta.state}, fmw.state = ${final_meta_writeback.state}\n")
         s_speculativerel := false.B
@@ -753,6 +755,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
       when (!new_meta.hit && new_meta.state =/= INVALID) {
         s_release := false.B
         w_releaseack := false.B
+        assert(new_meta.in_core === 0.U, cf"evicting a cache line in a partition! (in_core = ${new_meta.in_core}%x)")
         // Do we need to shoot-down inner caches?
         when ((!params.firstLevel).B & (new_meta.clients =/= 0.U)) {
           s_rprobe := false.B

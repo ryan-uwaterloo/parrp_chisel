@@ -350,6 +350,7 @@ class Directory(params: InclusiveCacheParameters) extends Module
   }.reverse)), parrp_speculated_victim_index) //cursed tagmatch to get the way to pass to the mshr
   io.result.bits.way := way_final
   io.result.bits.parrp_way := parrp_index //if hit, index of hit. if miss, index of evicted parrp line
+  assert(((parrp_table_core_vec(parrp_speculated_victim_index).state =/= 2.U) || parrp_hit) || !io.result.valid, "Trying to evict an allocated line from ParRP partition.")
 
 
   params.ccover(ren2 && setQuash && tagMatch, "DIRECTORY_HIT_BYPASS", "Bypassing write to a directory hit")

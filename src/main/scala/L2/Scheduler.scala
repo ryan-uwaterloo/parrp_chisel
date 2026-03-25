@@ -205,7 +205,7 @@ class InclusiveCacheBankScheduler(params: InclusiveCacheParameters) extends Modu
   nestedwb.b_toB       := select_bc && bc_mshr.io.schedule.bits.dir.valid && bc_mshr.io.schedule.bits.dir.bits.data.state === MetaData.BRANCH
   nestedwb.b_clr_dirty := select_bc && bc_mshr.io.schedule.bits.dir.valid
   nestedwb.c_set_dirty := select_c  &&  c_mshr.io.schedule.bits.dir.valid && c_mshr.io.schedule.bits.dir.bits.data.dirty
-
+  nestedwb.in_core     := Mux(select_c, c_mshr.io.schedule.bits.dir.bits.data.in_core, bc_mshr.io.schedule.bits.dir.bits.data.in_core)
   // request wire declaration
   val request = Wire(Decoupled(new FullRequest(params)))
 

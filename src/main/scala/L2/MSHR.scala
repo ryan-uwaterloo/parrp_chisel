@@ -58,6 +58,7 @@ class NestedWriteback(params: InclusiveCacheParameters) extends InclusiveCacheBu
   val b_toB       = Bool() // nested Probes may demote us
   val b_clr_dirty = Bool() // nested Probes clear dirty
   val c_set_dirty = Bool() // nested Releases MAY set dirty
+  val in_core = UInt(params.clientBits.W)
 }
 
 sealed trait CacheState
@@ -93,7 +94,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     val sinke     = Flipped(Valid(new SinkEResponse(params)))
     val nestedwb  = Flipped(new NestedWriteback(params))
     val storeack  = Flipped(Bool())
-    val age   = UInt(params.ageBits.W)
+    val age       = UInt(params.ageBits.W)
   })
 
   val request_valid = RegInit(false.B)
@@ -162,6 +163,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     when (io.nestedwb.c_set_dirty) { meta.dirty := true.B }
     when (io.nestedwb.b_toB) { meta.state := BRANCH }
     when (io.nestedwb.b_toN) { meta.hit := false.B }
+    meta.in_core := io.nestedwb.in_core
   }
 
   // Scheduler status

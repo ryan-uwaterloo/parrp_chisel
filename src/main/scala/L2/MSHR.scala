@@ -681,7 +681,7 @@ class MSHR(params: InclusiveCacheParameters) extends Module
     gotT := false.B
     bad_grant := false.B
 
-    printf(cf"@ clk_cycle ${clk_cycle}: Req in MSHR; need dram?: ${!new_meta.hit || (new_meta.state === BRANCH && new_needT)}, need probe? ${(new_meta.hit && (new_needT || new_meta.state === TRUNK) &&(new_meta.clients & ~new_skipProbe) =/= 0.U)}, evicting? ${!new_meta.hit && new_meta.state =/= INVALID}, back-inv? ${!new_meta.hit && new_meta.state =/= INVALID && (new_meta.clients =/= 0.U)}, source: 0x${new_request.source}%x\n")
+    printf(cf"@ clk_cycle ${clk_cycle}: Req in MSHR; need dram?: ${!new_meta.hit || (new_meta.state === BRANCH && new_needT)}, need probe? ${(new_meta.hit && (new_needT || new_meta.state === TRUNK) &&(new_meta.clients & ~new_skipProbe) =/= 0.U)}, evicting? ${!new_meta.hit && new_meta.state =/= INVALID}, back-inv? ${!new_meta.hit && new_meta.state =/= INVALID && (new_meta.clients =/= 0.U)}, source: 0x${new_request.source}%x, set: 0x${new_request.set}%x, tag: 0x${new_request.tag}%x\n")
 
     // These should already be either true or turning true
     // We clear them here explicitly to simplify the mux tree
